@@ -88,12 +88,31 @@ function checkView(c) {
   return timer('Match found: ready up', `${c.ready.length} / ${c.players.length} ready. Anyone not ready when time runs out is removed, and the queue reopens for everyone who is.`, c.deadline, S.readyMs) +
     `<div class="tiles">${c.players.map(k => { const r = c.ready.includes(k); return `<div class="tile ${r ? 'ok' : ''}"><div class="row" style="flex-wrap:nowrap">${av(k)}<div><b>${nm(k)}</b><div class="mut sm">${S.players[k].elo} Elo</div></div></div><span class="chip ${r ? 'ok' : ''}">${r ? 'Ready' : 'Waiting'}</span>${k === id() && !mine ? `<button class="p" onclick="act({type:'ready',checkId:'${c.id}'})">Ready</button>` : ''}</div>`; }).join('')}</div>`;
 }
+const sideTxt = m => m.sideB ? `Team B ${m.sideB}, Team A ${m.sideB === 'attack' ? 'defense' : 'attack'}` : '';
+const info = m => m.map ? `<div class="card" style="flex-direction:row;align-items:center;justify-content:space-between;flex-wrap:wrap"><div><div class="mut sm">Map</div><h2>${esc(m.map)}</h2></div><div class="mut">${sideTxt(m) || 'Side being chosen'}</div></div>` : '';
+const ja = o => esc(JSON.stringify(o));
+function vetoView(m) {
+  const t = m.veto.turn, mine = id() === m[t][0], v = m.veto, mem = m.A.includes(id()) ? 'A' : 'B', tally = m.tally || {};
+  const note = mine ? 'Your turn. Ban one map. Your team votes can help you decide. If time runs out, a random map is banned for you.' : mem === t ? 'Your leader is banning. Vote for the map you want banned.' : 'Team ' + t + ' leader is choosing. Vote for the map you would ban.';
+  return timer('Map ban: Team ' + t + ' to ban', note + ' Team A bans first, then the teams alternate until one map is left.', v.deadline, S.vetoMs) +
+    `<div class="tiles">${v.pool.map(x => { const b = v.bans.find(y => y.map === x), n = tally[x] || 0;
+      return `<div class="tile ${m.myVote === x && !b ? 'ok' : ''}" style="${b ? 'opacity:.45' : ''}"><b>${esc(x)}</b>${b ? `<span class="chip">Banned by Team ${b.team}</span>` : `<span class="mut sm">${n} vote${n == 1 ? '' : 's'} from your team</span><div class="row"><button class="s" onclick="act(${ja({ type: 'vote', matchId: m.id, map: x })})">${m.myVote === x ? 'Voted' : 'Vote to ban'}</button>${mine ? `<button class="s p" onclick="act(${ja({ type: 'mapban', matchId: m.id, map: x })})">Ban</button>` : ''}</div>`}</div>`; }).join('')}</div>`;
+}
+function tchatCard(m) {
+  const mem = m.A.includes(id()) ? 'A' : 'B', tc = m.tchat || [];
+  return `<div class="card" style="border-top:3px solid ${mem === 'A' ? 'var(--red)' : 'var(--blue)'}"><h3>Team ${mem} chat</h3><div class="mut sm">Only your team can see this.</div><div class="chat" id="tlog">${tc.length ? tc.map(x => `<div><b>${esc(x.from)}</b> ${esc(x.t)}</div>`).join('') : '<div class="mut">No messages yet.</div>'}</div><div class="row" style="width:100%">${inp('tmsg', 'Message your team')}<button onclick="act({type:'tsay',matchId:'${m.id}',text:f.tmsg})">Send</button></div></div>`;
+}
+function sideView(m) {
+  const mine = id() === m.B[0];
+  return timer('Map: ' + esc(m.map) + '. Team B picks a side', mine ? 'Choose attack or defense. If time runs out, a random side is picked.' : 'The Team B leader is choosing a side.', m.veto.deadline, S.sideMs) +
+    (mine ? `<div class="row"><button class="p" onclick="act({type:'pickside',matchId:'${m.id}',side:'attack'})">Attack</button><button class="p" onclick="act({type:'pickside',matchId:'${m.id}',side:'defense'})">Defense</button></div>` : '');
+}
 const teamCol = (ids, c, l) => `<div class="card" style="border-top:3px solid ${c}"><h3 style="color:${c}">${l}</h3>${ids.map((k, i) => `<div class="row" style="flex-wrap:nowrap">${av(k)}<div><b>${nm(k)}</b>${i == 0 ? ' <span class="chip">Leader</span>' : ''}</div></div>`).join('')}</div>`;
 function chat(m) {
   const lead = id() === m.A[0];
   return `<div class="card"><h3>Match chat</h3><div class="chat" id="log">${m.chat.length ? m.chat.map(x => line(m, x)).join('') : '<div class="mut">No messages yet.</div>'}</div>` +
     `<div class="row" style="width:100%">${inp('msg', 'Message')}<button onclick="act({type:'say',matchId:'${m.id}',text:f.msg})">Send</button></div>` +
-    (lead && m.status === 'live' && !m.code ? `<div class="row" style="width:100%">${inp('code', 'Party code from Valorant')}<button class="p" onclick="act({type:'announce',matchId:'${m.id}',code:f.code})">Announce party code</button></div>` : '') +
+    (lead && m.status === 'live' && !m.code && (!m.phase || m.phase === 'play') ? `<div class="row" style="width:100%">${inp('code', 'Party code from Valorant')}<button class="p" onclick="act({type:'announce',matchId:'${m.id}',code:f.code})">Announce party code</button></div>` : '') +
     (!m.code ? `<div class="mut sm">${lead ? 'Create the custom game in Valorant, then announce its party code.' : 'The Team A leader will announce the party code here.'}</div>` : '') + `</div>`;
 }
 function play() {
@@ -110,28 +129,31 @@ function play() {
   if (!m) { const q = S.queue.includes(id());
     return head + (missed ? `<div class="warn">You did not ready up in time, so you left the queue. Join again when you are ready.</div>` : '') +
       `<div class="card"><h2>${q ? 'Searching for players' : 'Find a match'}</h2><div class="bar"><i style="width:${S.queue.length / S.min * 100}%;transition:none"></i></div><div class="mut">${S.queue.length} / ${S.min} in queue. When it fills, everyone gets ${Math.round(S.readyMs / 60000 * 10) / 10} minutes to ready up.</div>` + (q ? `<button onclick="act({type:'leave'})">Leave queue</button>` : `<button class="p" onclick="act({type:'join'})">Join queue</button>`) + `</div>`; }
-  const lead = id() === m.A[0] || id() === m.B[0], ll = m.winner && (m.winner === 'A' ? m.B[0] : m.A[0]), playing = now() < (m.playUntil || 0);
+  const lead = id() === m.A[0] || id() === m.B[0], ll = m.winner && (m.winner === 'A' ? m.B[0] : m.A[0]), playing = now() < (m.playUntil || 0), ph = m.phase || 'play';
   let st = '';
-  if (m.status === 'live' && playing) st = timer('Match in play', 'Results can be reported when the timer ends.', m.playUntil, S.playMs);
+  if (m.status === 'live' && ph === 'veto') st = vetoView(m);
+  else if (m.status === 'live' && ph === 'side') st = sideView(m);
+  else if (m.status === 'live' && playing) st = timer('Match in play', 'Results can be reported when the timer ends.', m.playUntil, S.playMs);
   else if (m.status === 'live') st = lead ? `<div class="card"><h3>Report a win for your team</h3><div class="row"><input style="width:80px" type="number" value="${f.w}" oninput="f.w=this.value" aria-label="Your rounds"><span class="mut">to</span><input style="width:80px" type="number" value="${f.l}" oninput="f.l=this.value" aria-label="Their rounds"></div><input type="file" accept="image/*" onchange="pick('shot')(event)" aria-label="Scoreboard screenshot">${f.shot ? `<img src="${f.shot}" alt="Scoreboard preview">` : ''}<button class="p" onclick="act({type:'submit',matchId:'${m.id}',scoreW:+f.w,scoreL:+f.l,shot:f.shot})">Submit result</button></div>` : `<div class="card mut">Waiting for a team leader to report the result.</div>`;
   if (m.status === 'submitted') st = id() === ll ? `<div class="card"><h3>Team ${m.winner} reports ${m.scoreW}-${m.scoreL}</h3><div class="row"><button class="p" onclick="act({type:'confirm',matchId:'${m.id}'})">Confirm result</button><button onclick="act({type:'dispute',matchId:'${m.id}'})">Dispute</button></div></div>` : `<div class="card mut">Waiting for the other leader to confirm.</div>`;
   if (m.status === 'disputed') st = `<div class="card mut">A moderator is reviewing this match.</div>`;
-  return head + `<div class="g">${teamCol(m.A, 'var(--red)', 'Team A')}${teamCol(m.B, 'var(--blue)', 'Team B')}</div>${st}` + chat(m);
+  return head + info(m) + `<div class="g">${teamCol(m.A, 'var(--red)', 'Team A')}${teamCol(m.B, 'var(--blue)', 'Team B')}</div>${st}` + chat(m) + tchatCard(m);
 }
 function board() {
   const r = Object.entries(S.players).filter(([k, v]) => v.status === 'approved' && !v.bot).sort((a, b) => b[1].elo - a[1].elo);
   return `<div class="card"><h2>Leaderboard</h2>${r.length ? r.map(([k, v], i) => `<div class="lb t${i + 1} ${k === id() ? 'me' : ''}"><span class="row" style="flex-wrap:nowrap"><span class="rk">${i + 1}</span>${av(k)}<b>${esc(v.name)}</b></span><b>${v.elo}</b></div>`).join('') : '<div class="mut">No verified players yet.</div>'}</div>`;
 }
 function mod() {
+  if (f.pool === undefined) f.pool = S.pool.join(', ');
   const P = Object.entries(S.players), pend = P.filter(([k, v]) => v.status === 'pending'), d = S.matches.filter(x => x.status === 'disputed'), live = S.matches.filter(x => ['live', 'submitted'].includes(x.status));
   pend.forEach(([k]) => need('p' + k, '/api/state?proof=' + encodeURIComponent(k))); d.forEach(x => need('m' + x.id, '/api/state?shot=' + x.id));
   const img = k => shots[k] && shots[k].trim() && shots[k] !== 'loading' ? `<img src="${shots[k]}" alt="Screenshot">` : '';
   const box = c => `<div class="card" style="background:#0b0f14">${c}</div>`;
   const bt = (l, o, p) => `<button${p ? ' class="p"' : ''} onclick="act(${esc(JSON.stringify(o))})">${l}</button>`;
-  return `<div class="card"><h2>Moderator</h2><h3>Test tools</h3><div class="mut">Join the queue on the Play tab first, then fill the empty spots with test players. Test players ready up on their own.</div><div class="row">${bt('Fill queue with test players', { type: 'fillqueue' }, 1)}${bt('Remove test players', { type: 'clearbots' })}</div><h3>Accounts to verify</h3>` +
+  return `<div class="card"><h2>Moderator</h2><h3>Test tools</h3><div class="mut">Join the queue on the Play tab first, then fill the empty spots with test players. Test players ready up on their own.</div><div class="row">${bt('Fill queue with test players', { type: 'fillqueue' }, 1)}${bt('Remove test players', { type: 'clearbots' })}</div><h3>Map pool</h3><div class="row" style="width:100%">${inp('pool', 'Maps, comma separated')}<button class="p" onclick="act({type:'setpool',maps:f.pool.split(',').map(x=>x.trim()).filter(Boolean)})">Save pool</button></div><div class="mut sm">Applies to new matches.</div><h3>Accounts to verify</h3>` +
     (pend.length ? pend.map(([k, v]) => box(`<div>${esc(v.name)}</div>${img('p' + k)}<div class="row">${bt('Approve', { type: 'review', target: k, approve: true }, 1)}${bt('Reject', { type: 'review', target: k, approve: false })}</div>`)).join('') : '<div class="mut">No accounts waiting.</div>') +
     `<h3>Disputed matches</h3>` + (d.length ? d.map(x => box(`<div>Team ${x.winner} reports ${x.scoreW}-${x.scoreL}. Leaders: ${nm(x.A[0])} vs ${nm(x.B[0])}</div>${img('m' + x.id)}<div class="row">${bt('Uphold result', { type: 'resolve', matchId: x.id, uphold: true }, 1)}${bt('Void match', { type: 'resolve', matchId: x.id, uphold: false })}</div>`)).join('') : '<div class="mut">No disputed matches.</div>') +
-    `<h3>Open matches</h3>` + (live.length ? live.map(x => box(`<div>${nm(x.A[0])} vs ${nm(x.B[0])} (${x.status})</div><div class="chat">${x.chat.slice(-5).map(c => line(x, c)).join('') || '<span class="mut">No chat.</span>'}</div><div class="row">${x.status === 'live' && now() < x.playUntil ? bt('End timer early', { type: 'skiptimer', matchId: x.id }) : ''}${x.status === 'submitted' ? bt('Uphold result', { type: 'resolve', matchId: x.id, uphold: true }, 1) : ''}${bt('Void match', { type: 'voidmatch', matchId: x.id })}</div>`)).join('') : '<div class="mut">No open matches.</div>') +
+    `<h3>Open matches</h3>` + (live.length ? live.map(x => box(`<div>${nm(x.A[0])} vs ${nm(x.B[0])} (${x.status}${x.phase && x.phase !== 'play' ? ', ' + x.phase : ''})</div><div class="chat">${x.chat.slice(-5).map(c => line(x, c)).join('') || '<span class="mut">No chat.</span>'}</div><div class="row">${x.status === 'live' && (x.phase || 'play') === 'play' && now() < x.playUntil ? bt('End timer early', { type: 'skiptimer', matchId: x.id }) : ''}${x.status === 'submitted' ? bt('Uphold result', { type: 'resolve', matchId: x.id, uphold: true }, 1) : ''}${bt('Void match', { type: 'voidmatch', matchId: x.id })}</div>`)).join('') : '<div class="mut">No open matches.</div>') +
     `<h3>Players</h3>` + P.filter(([k, v]) => k !== id() && !v.bot).map(([k, v]) => `<div class="lb"><span>${esc(v.name)} <span class="mut sm">${v.role}, ${v.status}</span></span><span class="row">` +
       (v.role === 'mod' ? bt('Remove moderator', { type: 'setrole', target: k, role: 'player' }) : bt('Make moderator', { type: 'setrole', target: k, role: 'mod' }) + (v.status === 'banned' ? bt('Unban', { type: 'ban', target: k, ban: false }) : bt('Ban', { type: 'ban', target: k, ban: true }))) + `</span></div>`).join('') + `</div>`;
 }

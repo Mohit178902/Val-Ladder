@@ -37,7 +37,7 @@ img{max-width:100%;max-height:240px;border-radius:10px}
 @media(max-width:560px){.clock{font-size:60px}h2{font-size:28px}}
 </style></head><body><header id="hd"></header><main id="app"></main>
 <script>
-let S, tab = 'play', mode = 'login', me = localStorage.me || '', tk = localStorage.tk || '', f = { w: '13', l: '', shot: '', proof: '', name: '', pass: '', msg: '', code: '' }, shots = {}, last = '', off = 0, wasIn = false, missed = false;
+let S, tab = 'play', mode = 'login', me = localStorage.me || '', tk = localStorage.tk || '', f = { w: '13', l: '', shot: '', proof: '', name: '', pass: '', msg: '', tmsg: '', code: '' }, shots = {}, last = '', off = 0, wasIn = false, missed = false;
 const H = document.getElementById('hd'), A = document.getElementById('app'), id = () => me.toLowerCase();
 const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const nm = i => esc(S.players[i] ? S.players[i].name : i), now = () => Date.now() + off;
@@ -51,11 +51,13 @@ async function act(o) {
   else if (j.token) { tk = j.token; localStorage.tk = tk; me = o.name; localStorage.me = me; }
   else if (o.type === 'submit') f.w = '13', f.l = '', f.shot = '';
   else if (o.type === 'say') f.msg = '';
+  else if (o.type === 'tsay') f.tmsg = '';
   else if (o.type === 'announce') f.code = '';
   load(true);
 }
 async function load(force) {
-  try { S = await (await fetch('/api/state')).json(); } catch (e) { return; }
+  try { const j = await (await fetch('/api/state?me=' + encodeURIComponent(id()) + '&token=' + tk)).json(); if (!j.players) throw new Error('bad response'); S = j; }
+  catch (e) { if (!S) A.innerHTML = '<div class="card"><h2>Cannot reach the server</h2><div class="mut">The page loaded, but the server did not answer. Refresh in a minute. If it keeps happening, the site owner should check the Vercel function logs and the database connection.</div></div>'; return; }
   off = S.now - Date.now();
   const { now: _n, ...rest } = S, k = JSON.stringify(rest) + tab + me + tk + mode;
   if (force || k !== last) { last = k; render(); }
@@ -110,7 +112,7 @@ function sideView(m) {
 const teamCol = (ids, c, l) => `<div class="card" style="border-top:3px solid ${c}"><h3 style="color:${c}">${l}</h3>${ids.map((k, i) => `<div class="row" style="flex-wrap:nowrap">${av(k)}<div><b>${nm(k)}</b>${i == 0 ? ' <span class="chip">Leader</span>' : ''}</div></div>`).join('')}</div>`;
 function chat(m) {
   const lead = id() === m.A[0];
-  return `<div class="card"><h3>Match chat</h3><div class="chat" id="log">${m.chat.length ? m.chat.map(x => line(m, x)).join('') : '<div class="mut">No messages yet.</div>'}</div>` +
+  return `<div class="card"><h3>Match chat</h3><div class="chat" id="log">${(m.chat || []).length ? (m.chat || []).map(x => line(m, x)).join('') : '<div class="mut">No messages yet.</div>'}</div>` +
     `<div class="row" style="width:100%">${inp('msg', 'Message')}<button onclick="act({type:'say',matchId:'${m.id}',text:f.msg})">Send</button></div>` +
     (lead && m.status === 'live' && !m.code && (!m.phase || m.phase === 'play') ? `<div class="row" style="width:100%">${inp('code', 'Party code from Valorant')}<button class="p" onclick="act({type:'announce',matchId:'${m.id}',code:f.code})">Announce party code</button></div>` : '') +
     (!m.code ? `<div class="mut sm">${lead ? 'Create the custom game in Valorant, then announce its party code.' : 'The Team A leader will announce the party code here.'}</div>` : '') + `</div>`;
@@ -128,7 +130,7 @@ function play() {
   const head = `<div class="card"><div class="row" style="flex-wrap:nowrap">${av(id())}<div><b>${esc(p.name)}</b><div class="mut sm">Rating</div></div></div><div class="big">${p.elo}</div></div>`;
   if (!m) { const q = S.queue.includes(id());
     return head + (missed ? `<div class="warn">You did not ready up in time, so you left the queue. Join again when you are ready.</div>` : '') +
-      `<div class="card"><h2>${q ? 'Searching for players' : 'Find a match'}</h2><div class="bar"><i style="width:${S.queue.length / S.min * 100}%;transition:none"></i></div><div class="mut">${S.queue.length} / ${S.min} in queue. When it fills, everyone gets ${Math.round(S.readyMs / 60000 * 10) / 10} minutes to ready up.</div>` + (q ? `<button onclick="act({type:'leave'})">Leave queue</button>` : `<button class="p" onclick="act({type:'join'})">Join queue</button>`) + `</div>`; }
+      `<div class="card"><h2>${q ? 'Searching for players' : 'Find a match'}</h2><div class="bar"><i style="width:${S.queue.length / S.min * 100}%;transition:none"></i></div><div class="mut">${S.queue.length} / ${S.min} in queue. When it fills, everyone gets ${S.readyMs / 1000} seconds to ready up.</div>` + (q ? `<button onclick="act({type:'leave'})">Leave queue</button>` : `<button class="p" onclick="act({type:'join'})">Join queue</button>`) + `</div>`; }
   const lead = id() === m.A[0] || id() === m.B[0], ll = m.winner && (m.winner === 'A' ? m.B[0] : m.A[0]), playing = now() < (m.playUntil || 0), ph = m.phase || 'play';
   let st = '';
   if (m.status === 'live' && ph === 'veto') st = vetoView(m);
@@ -165,7 +167,7 @@ function render() {
   H.innerHTML = `<div class="in"><h1>Ladder <span style="color:var(--red)">/ Valorant</span></h1><div class="row"><div class="tabs">${t('play', 'Play')}${t('board', 'Leaderboard')}${isMod() ? t('mod', 'Moderator') : ''}</div>${tk ? '<button onclick="out()">Sign out</button>' : ''}</div></div>`;
   A.innerHTML = ({ play, board, mod }[tab])();
   const el = fid && document.getElementById(fid); if (el) { el.focus(); try { el.setSelectionRange(pos, pos); } catch (e) {} }
-  const lg = document.getElementById('log'); if (lg) lg.scrollTop = lg.scrollHeight;
+  ['log', 'tlog'].forEach(k => { const lg = document.getElementById(k); if (lg) lg.scrollTop = lg.scrollHeight; });
   tickUI();
 }
 load(true); setInterval(() => { if (!document.hidden) load(); }, 4000); setInterval(tickUI, 1000);

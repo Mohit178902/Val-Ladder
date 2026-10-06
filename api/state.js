@@ -2,7 +2,9 @@ const crypto = require('crypto');
 const U = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
 const T = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
 const MIN = +process.env.MIN_PLAYERS || 10;
-const READY_MS = (+process.env.READY_SECONDS || 180) * 1000, PLAY_MS = (+process.env.PLAY_MINUTES || 25) * 60000;
+const POOL = (process.env.MAP_POOL || 'Abyss,Ascent,Haven,Lotus,Split,Summit,Sunset').split(',').map(x => x.trim()).filter(Boolean);
+const VETO_MS = (+process.env.VETO_SECONDS || 30) * 1000, SIDE_MS = (+process.env.SIDE_SECONDS || 30) * 1000;
+const READY_MS = (+process.env.READY_SECONDS || 90) * 1000, PLAY_MS = (+process.env.PLAY_MINUTES || 25) * 60000;
 const BOOT = (process.env.MOD_BOOTSTRAP || '').toLowerCase().split(',').map(x => x.trim()).filter(Boolean);
 const RULES = 'keep the cheats off and no pauses only timeouts';
 const r = async c => (await (await fetch(U, { method: 'POST', headers: { Authorization: 'Bearer ' + T }, body: JSON.stringify(c) })).json()).result;
@@ -18,11 +20,24 @@ const makeCheck = s => {
 const startMatch = (s, c) => {
   const ids = c.players.slice().sort((a, d) => s.players[d].elo - s.players[a].elo), A = [], B = [], now = Date.now();
   ids.forEach((id, i) => (i % 4 == 0 || i % 4 == 3 ? A : B).push(id));
-  s.matches.push({ id: now.toString(36), A, B, status: 'live', code: '', chat: [], startedAt: now, playUntil: now + PLAY_MS });
+  s.matches.push({ id: now.toString(36), A, B, status: 'live', code: '', chat: [], startedAt: now, phase: 'veto', map: '',
+    veto: { pool: (s.pool && s.pool.length > 1 ? s.pool : POOL).slice(), bans: [], turn: 'A', deadline: now + VETO_MS }, playUntil: 0 });
   s.checks = s.checks.filter(x => x !== c);
 };
+const openMaps = m => m.veto.pool.filter(x => !m.veto.bans.some(b => b.map === x));
+const banMap = (m, team, map, at) => {
+  m.veto.bans.push({ team, map });
+  const left = openMaps(m);
+  if (left.length === 1) { m.map = left[0]; m.phase = 'side'; m.veto.turn = 'B'; m.veto.deadline = at + SIDE_MS; }
+  else { m.veto.turn = team === 'A' ? 'B' : 'A'; m.veto.deadline = at + VETO_MS; }
+};
+const setSide = (m, side, at) => { m.sideB = side; m.phase = 'play'; m.playUntil = at + PLAY_MS; };
 const tick = s => {
   let ch = false;
+  for (const m of s.matches) if (open(m) && ['veto', 'side'].includes(m.phase)) {
+    while (m.phase === 'veto' && Date.now() > m.veto.deadline) { const l = openMaps(m); banMap(m, m.veto.turn, l[Math.random() * l.length | 0], m.veto.deadline); ch = true; }
+    if (m.phase === 'side' && Date.now() > m.veto.deadline) { setSide(m, Math.random() < .5 ? 'attack' : 'defense', m.veto.deadline); ch = true; }
+  }
   for (const c of s.checks.slice()) if (Date.now() > c.deadline) { s.queue = [...c.ready, ...s.queue]; s.checks = s.checks.filter(x => x !== c); ch = true; }
   while (s.queue.length >= MIN) { makeCheck(s); ch = true; }
   return ch;
@@ -45,17 +60,30 @@ module.exports = async (req, res) => {
       if (q.proof) return res.json({ shot: (s.players[q.proof] || {}).proof });
       const m = s.matches.find(x => x.id === q.shot); return res.json({ shot: m && m.shot });
     }
+    const usr = s.players[q.me], who = usr && usr.token === q.token ? q.me : null, isM = who && usr.role === 'mod';
+    const view = m => {
+      const { shot, tchat, veto, chat, ...x } = m, votes = (veto && veto.votes) || {}, o = { ...x, hasShot: !!shot };
+      const team = who && m.A.includes(who) ? 'A' : who && m.B.includes(who) ? 'B' : null;
+      if (veto) o.veto = { ...veto, votes: undefined };
+      if (team || isM) o.chat = chat || [];
+      if (team) {
+        const mem = team === 'A' ? m.A : m.B, tally = {};
+        Object.entries(votes).forEach(([k, v]) => { if (mem.includes(k)) tally[v] = (tally[v] || 0) + 1; });
+        o.tally = tally; o.myVote = votes[who]; o.tchat = (tchat || {})[team] || [];
+      }
+      return o;
+    };
     const pl = {}; for (const k in s.players) { const p = s.players[k]; pl[k] = { name: p.name, elo: p.elo, status: p.status, role: p.role || 'player', bot: !!p.bot }; }
-    return res.json({ players: pl, queue: s.queue, min: MIN, checks: s.checks, now: Date.now(), readyMs: READY_MS, playMs: PLAY_MS, matches: s.matches.map(({ shot, ...m }) => ({ ...m, hasShot: !!shot })) });
+    return res.json({ players: pl, queue: s.queue, min: MIN, checks: s.checks, now: Date.now(), readyMs: READY_MS, playMs: PLAY_MS, vetoMs: VETO_MS, sideMs: SIDE_MS, pool: s.pool && s.pool.length > 1 ? s.pool : POOL, matches: s.matches.filter(open).map(view) });
   }
   const b = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const me = b.me, p = s.players[me], authed = p && p.token && p.token === b.token;
   const m = s.matches.find(x => x.id === b.matchId);
   const loserLead = m && (m.winner === 'A' ? m.B[0] : m.A[0]);
   const isMod = authed && p.role === 'mod';
-  const MODS = ['review', 'resolve', 'setrole', 'ban', 'voidmatch', 'delmsg', 'fillqueue', 'clearbots', 'skiptimer'];
+  const MODS = ['review', 'resolve', 'setrole', 'ban', 'voidmatch', 'delmsg', 'fillqueue', 'clearbots', 'skiptimer', 'setpool'];
   let err, extra = {};
-  if (['join', 'leave', 'submit', 'confirm', 'dispute', 'say', 'announce', 'ready', ...MODS].includes(b.type) && !authed) err = 'Please sign in again.';
+  if (['join', 'leave', 'submit', 'confirm', 'dispute', 'say', 'announce', 'ready', 'mapban', 'pickside', 'vote', 'tsay', ...MODS].includes(b.type) && !authed) err = 'Please sign in again.';
   else if (MODS.includes(b.type) && !isMod) err = 'Moderators only.';
   else switch (b.type) {
     case 'register': {
@@ -91,7 +119,35 @@ module.exports = async (req, res) => {
       else { if (!c.ready.includes(me)) c.ready.push(me); if (c.ready.length === c.players.length) startMatch(s, c); }
       break;
     }
-    case 'skiptimer': if (m && open(m)) m.playUntil = Date.now(); else err = 'Match is not open.'; break;
+    case 'mapban': {
+      const t = m && m.phase === 'veto' && m.veto.turn;
+      if (!t || me !== m[t][0]) err = 'It is not your turn to ban.';
+      else if (!openMaps(m).includes(b.map)) err = 'That map is not available.';
+      else banMap(m, t, b.map, Date.now());
+      break;
+    }
+    case 'pickside':
+      if (!m || m.phase !== 'side' || me !== m.B[0]) err = 'Only the Team B leader can choose the side.';
+      else if (!['attack', 'defense'].includes(b.side)) err = 'Choose attack or defense.';
+      else setSide(m, b.side, Date.now());
+      break;
+    case 'setpool': {
+      const mp = [...new Set((b.maps || []).map(x => String(x).trim().slice(0, 24)).filter(Boolean))];
+      if (mp.length < 2 || mp.length > 15) err = 'Enter between 2 and 15 maps.'; else s.pool = mp;
+      break;
+    }
+    case 'vote':
+      if (m && m.phase === 'veto' && [...m.A, ...m.B].includes(me) && openMaps(m).includes(b.map)) { m.veto.votes = m.veto.votes || {}; m.veto.votes[me] = b.map; }
+      else err = 'Voting is closed.';
+      break;
+    case 'tsay': {
+      const tm = m && open(m) && (m.A.includes(me) ? 'A' : m.B.includes(me) ? 'B' : '');
+      if (!tm) { err = 'You are not in this match.'; break; }
+      m.tchat = m.tchat || { A: [], B: [] };
+      m.tchat[tm].push({ i: rnd().slice(0, 8), from: p.name, t: String(b.text || '').slice(0, 200) }); m.tchat[tm] = m.tchat[tm].slice(-100);
+      break;
+    }
+    case 'skiptimer': if (m && open(m) && (!m.phase || m.phase === 'play')) m.playUntil = Date.now(); else err = 'Match is not open, or the map is still being chosen.'; break;
     case 'leave': s.queue = s.queue.filter(x => x !== me); break;
     case 'say':
       if (!m || !open(m) || ![...m.A, ...m.B].includes(me)) { err = 'You are not in this match.'; break; }
@@ -99,12 +155,13 @@ module.exports = async (req, res) => {
       break;
     case 'announce':
       if (!m || m.status !== 'live' || me !== m.A[0]) { err = 'Only the Team A leader can announce the party code.'; break; }
+      if (m.phase && m.phase !== 'play') { err = 'Announce the party code after the map and side are chosen.'; break; }
       if (!/^[A-Za-z0-9-]{3,12}$/.test(b.code || '')) { err = 'Enter the party code exactly as shown in Valorant.'; break; }
       m.code = b.code; m.chat.push({ i: rnd().slice(0, 8), sys: true, t: 'Party code: ' + b.code + ' - ' + RULES });
       break;
     case 'submit':
       if (!m || m.status !== 'live' || (me !== m.A[0] && me !== m.B[0])) { err = 'Only a team leader can report.'; break; }
-      if (Date.now() < (m.playUntil || 0)) { err = 'The match is still in play. Results open when the timer ends.'; break; }
+      if ((m.phase && m.phase !== 'play') || Date.now() < (m.playUntil || 0)) { err = 'The match is not over yet. Results open when the timer ends.'; break; }
       if (!(b.scoreW >= 13 && b.scoreW > b.scoreL && b.scoreL >= 0)) { err = 'Winner needs 13+ rounds and more than the other team.'; break; }
       if (!b.shot) { err = 'Upload the scoreboard screenshot.'; break; }
       Object.assign(m, { winner: me === m.A[0] ? 'A' : 'B', scoreW: b.scoreW, scoreL: b.scoreL, shot: b.shot, status: 'submitted' });

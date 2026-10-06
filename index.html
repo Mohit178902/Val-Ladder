@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ladder</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500&display=swap">
+<style>
+body{margin:0;background:#0d1117;font-family:'Barlow',system-ui,sans-serif;color:#e8edf2}
+h1,h2,h3{font-family:'Barlow Condensed',sans-serif;margin:0;letter-spacing:.03em}
+main{max-width:1000px;margin:0 auto;padding:24px 20px 48px;display:flex;flex-direction:column;gap:20px}
+.card{background:#141b23;border:1px solid #232d38;border-radius:14px;padding:24px;display:flex;flex-direction:column;gap:14px;align-items:flex-start}
+button{font:inherit;cursor:pointer;min-height:44px;padding:0 20px;border-radius:10px;border:1px solid #3a4756;background:transparent;color:#e8edf2}
+button.p{background:#ff4d5a;border-color:#ff4d5a;color:#0d1117;font-weight:500}
+button:focus-visible,input:focus-visible{outline:2px solid #ff8a93;outline-offset:2px}
+input{font:inherit;background:#0d1117;border:1px solid #3a4756;border-radius:10px;color:#e8edf2;padding:0 14px;min-height:46px;box-sizing:border-box}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}.mut{color:#9aa7b4}.big{font:700 44px 'Barlow Condensed',sans-serif;color:#ff4d5a}
+.g{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;width:100%}
+.me{background:#2a1a20;color:#ff8a93}.lb{display:flex;justify-content:space-between;width:100%;padding:10px 12px;border-radius:8px;box-sizing:border-box}
+.chat{width:100%;box-sizing:border-box;max-height:220px;overflow:auto;background:#0d1117;border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:6px}.sys{color:#ff8a93}
+img{max-width:100%;max-height:240px;border-radius:10px}
+</style></head><body><main id="app"></main>
+<script>
+let S, tab = 'play', mode = 'login', me = localStorage.me || '', tk = localStorage.tk || '', f = { w: '13', l: '', shot: '', pw: '', proof: '', name: '', pass: '', msg: '', code: '' }, shots = {}, last = '';
+const A = document.getElementById('app'), id = () => me.toLowerCase();
+const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const nm = i => esc(S.players[i] ? S.players[i].name : i);
+async function act(o) {
+  const j = await (await fetch('/api/state', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ me: id(), token: tk, ...o }) })).json();
+  if (!j.ok) { alert(j.err); if (/sign in/.test(j.err)) { tk = ''; localStorage.tk = ''; } }
+  else if (j.token) { tk = j.token; localStorage.tk = tk; me = o.name; localStorage.me = me; }
+  else if (o.type === 'submit') f.w = '13', f.l = '', f.shot = '';
+  else if (o.type === 'say') f.msg = '';
+  else if (o.type === 'announce') f.code = '';
+  load(true);
+}
+async function load(force) {
+  try { S = await (await fetch('/api/state')).json(); } catch (e) { return; }
+  const k = JSON.stringify(S) + tab + me + tk + mode;
+  if (force || k !== last) { last = k; render(); }
+}
+const go = t => { tab = t; render(); };
+const out = () => { tk = ''; localStorage.tk = ''; render(); };
+function pick(key) { return e => {
+  const file = e.target.files[0]; if (!file) return;
+  const im = new Image(); im.onload = () => { const k = Math.min(1, 900 / im.width), c = document.createElement('canvas'); c.width = im.width * k; c.height = im.height * k;
+    c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); f[key] = c.toDataURL('image/jpeg', .6); render(); }; im.src = URL.createObjectURL(file); }; }
+async function need(key, url) { if (!shots[key]) { shots[key] = 'loading'; const j = await (await fetch(url + '&me=' + encodeURIComponent(id()) + '&token=' + tk)).json(); shots[key] = j.shot || ' '; render(); } }
+const team = ids => ids.map((x, i) => `<div>${nm(x)}${i == 0 ? ' <span class="mut">(leader)</span>' : ''}</div>`).join('');
+const inp = (k, ph, type) => `<input id="${k}" type="${type || 'text'}" placeholder="${ph}" value="${esc(f[k])}" oninput="f.${k}=this.value" aria-label="${ph}">`;
+const isMod = () => S.players[id()] && S.players[id()].role === 'mod';
+const del = (m, x) => isMod() && x.i ? ` <button style="min-height:28px;padding:0 8px" onclick="act({type:'delmsg',matchId:'${m.id}',msgId:'${x.i}'})">Delete</button>` : '';
+const line = (m, x) => x.sys ? `<div class="sys"><b>${esc(x.t)}</b>${del(m, x)}</div>` : `<div><b>${esc(x.from)}</b> ${esc(x.t)}${del(m, x)}</div>`;
+function auth() {
+  const c = mode === 'create';
+  return `<div class="card"><h2>${c ? 'Create account' : 'Sign in'}</h2>${inp('name', 'Riot ID (Name#TAG)')}${inp('pass', 'Password', 'password')}` +
+    (c ? `<div class="mut">Upload a screenshot of your Valorant profile showing this Riot ID. Our team checks it before you can play.</div><input type="file" accept="image/*" onchange="pick('proof')(event)" aria-label="Profile screenshot">${f.proof ? `<img src="${f.proof}" alt="Profile preview">` : ''}` : '') +
+    `<div class="row"><button class="p" onclick="act({type:'${c ? 'register' : 'login'}',name:f.name.trim(),password:f.pass,proof:f.proof})">${c ? 'Create account' : 'Sign in'}</button><button onclick="mode='${c ? 'login' : 'create'}';render()">${c ? 'I have an account' : 'Create account'}</button></div></div>`;
+}
+function chat(m) {
+  const lead = id() === m.A[0];
+  return `<div class="card" style="width:100%;box-sizing:border-box"><h3>Match chat</h3><div class="chat" id="log">${m.chat.length ? m.chat.map(x => line(m, x)).join('') : '<div class="mut">No messages yet.</div>'}</div>` +
+    `<div class="row" style="width:100%">${inp('msg', 'Message')}<button onclick="act({type:'say',matchId:'${m.id}',text:f.msg})">Send</button></div>` +
+    (lead && m.status === 'live' && !m.code ? `<div class="row" style="width:100%">${inp('code', 'Party code from Valorant')}<button class="p" onclick="act({type:'announce',matchId:'${m.id}',code:f.code})">Announce party code</button></div>` : '') +
+    (!m.code ? `<div class="mut">${lead ? 'Create the custom game in Valorant, then announce its party code.' : 'The Team A leader will announce the party code here.'}</div>` : '') + `</div>`;
+}
+function play() {
+  const p = S.players[id()];
+  if (!tk || !p) return auth();
+  if (p.status === 'pending') return `<div class="card"><h2>Waiting for verification</h2><div class="mut">Our team is checking your profile screenshot. Come back soon.</div></div>`;
+  if (p.status === 'rejected') return `<div class="card"><h2>Verification failed</h2><div class="mut">Your screenshot did not match this Riot ID. Contact the moderators.</div></div>`;
+  if (p.status === 'banned') return `<div class="card"><h2>Account banned</h2><div class="mut">A moderator has banned this account.</div></div>`;
+  const m = S.matches.find(x => ['live', 'submitted', 'disputed'].includes(x.status) && [...x.A, ...x.B].includes(id()));
+  const head = `<div class="card"><div class="mut">${esc(p.name)}</div><div class="big">${p.elo}</div></div>`;
+  if (!m) { const q = S.queue.includes(id());
+    return head + `<div class="card"><h2>${q ? 'Searching' : 'Find a match'}</h2><div class="mut">${S.queue.length} / ${S.min} in queue</div>` + (q ? `<button onclick="act({type:'leave'})">Leave queue</button>` : `<button class="p" onclick="act({type:'join'})">Join queue</button>`) + `</div>`; }
+  const lead = id() === m.A[0] || id() === m.B[0], ll = m.winner && (m.winner === 'A' ? m.B[0] : m.A[0]);
+  let st = '';
+  if (m.status === 'live') st = lead ? `<h3>Report a win for your team</h3><div class="row"><input style="width:80px" type="number" value="${f.w}" oninput="f.w=this.value" aria-label="Your rounds"><span class="mut">to</span><input style="width:80px" type="number" value="${f.l}" oninput="f.l=this.value" aria-label="Their rounds"></div><input type="file" accept="image/*" onchange="pick('shot')(event)" aria-label="Scoreboard screenshot">${f.shot ? `<img src="${f.shot}" alt="Scoreboard preview">` : ''}<button class="p" onclick="act({type:'submit',matchId:'${m.id}',scoreW:+f.w,scoreL:+f.l,shot:f.shot})">Submit result</button>` : `<div class="mut">Waiting for a team leader to report the result.</div>`;
+  if (m.status === 'submitted') st = id() === ll ? `<h3>Team ${m.winner} reports ${m.scoreW}-${m.scoreL}</h3><div class="row"><button class="p" onclick="act({type:'confirm',matchId:'${m.id}'})">Confirm result</button><button onclick="act({type:'dispute',matchId:'${m.id}'})">Dispute</button></div>` : `<div class="mut">Waiting for the other leader to confirm.</div>`;
+  if (m.status === 'disputed') st = `<div class="mut">A moderator is reviewing this match.</div>`;
+  return head + `<div class="card" style="width:100%;box-sizing:border-box"><div class="g"><div><h3>Team A</h3>${team(m.A)}</div><div><h3>Team B</h3>${team(m.B)}</div></div>${st}</div>` + chat(m);
+}
+function board() {
+  const r = Object.entries(S.players).filter(([k, v]) => v.status === 'approved').sort((a, b) => b[1].elo - a[1].elo);
+  return `<div class="card" style="width:100%;box-sizing:border-box"><h2>Leaderboard</h2>${r.length ? r.map(([k, v], i) => `<div class="lb ${k === id() ? 'me' : ''}"><span>${i + 1}. ${esc(v.name)}</span><b>${v.elo}</b></div>`).join('') : '<div class="mut">No verified players yet.</div>'}</div>`;
+}
+function mod() {
+  const P = Object.entries(S.players), pend = P.filter(([k, v]) => v.status === 'pending'), d = S.matches.filter(x => x.status === 'disputed'), live = S.matches.filter(x => ['live', 'submitted'].includes(x.status));
+  pend.forEach(([k]) => need('p' + k, '/api/state?proof=' + encodeURIComponent(k))); d.forEach(x => need('m' + x.id, '/api/state?shot=' + x.id));
+  const img = k => shots[k] && shots[k].trim() && shots[k] !== 'loading' ? `<img src="${shots[k]}" alt="Screenshot">` : '';
+  const box = c => `<div class="card" style="width:100%;box-sizing:border-box">${c}</div>`;
+  const bt = (l, o, p) => `<button${p ? ' class="p"' : ''} onclick="act(${esc(JSON.stringify(o))})">${l}</button>`;
+  return `<div class="card" style="width:100%;box-sizing:border-box"><h2>Moderator</h2><h3>Accounts to verify</h3>` +
+    (pend.length ? pend.map(([k, v]) => box(`<div>${esc(v.name)}</div>${img('p' + k)}<div class="row">${bt('Approve', { type: 'review', target: k, approve: true }, 1)}${bt('Reject', { type: 'review', target: k, approve: false })}</div>`)).join('') : '<div class="mut">No accounts waiting.</div>') +
+    `<h3>Disputed matches</h3>` + (d.length ? d.map(x => box(`<div>Team ${x.winner} reports ${x.scoreW}-${x.scoreL}. Leaders: ${nm(x.A[0])} vs ${nm(x.B[0])}</div>${img('m' + x.id)}<div class="row">${bt('Uphold result', { type: 'resolve', matchId: x.id, uphold: true }, 1)}${bt('Void match', { type: 'resolve', matchId: x.id, uphold: false })}</div>`)).join('') : '<div class="mut">No disputed matches.</div>') +
+    `<h3>Open matches</h3>` + (live.length ? live.map(x => box(`<div>${nm(x.A[0])} vs ${nm(x.B[0])} (${x.status})</div><div class="chat">${x.chat.slice(-5).map(c => line(x, c)).join('') || '<span class="mut">No chat.</span>'}</div>${bt('Void match', { type: 'voidmatch', matchId: x.id })}`)).join('') : '<div class="mut">No open matches.</div>') +
+    `<h3>Players</h3>` + P.filter(([k]) => k !== id()).map(([k, v]) => `<div class="row lb" style="background:#0d1117"><span>${esc(v.name)} <span class="mut">${v.role}, ${v.status}</span></span><span class="row">` +
+      (v.role === 'mod' ? bt('Remove moderator', { type: 'setrole', target: k, role: 'player' }) : bt('Make moderator', { type: 'setrole', target: k, role: 'mod' }) + (v.status === 'banned' ? bt('Unban', { type: 'ban', target: k, ban: false }) : bt('Ban', { type: 'ban', target: k, ban: true }))) + `</span></div>`).join('') + `</div>`;
+}
+function render() {
+  if (!S) return;
+  const ae = document.activeElement, fid = ae && ae.id, pos = ae && ae.selectionStart;
+  if (tab === 'mod' && !isMod()) tab = 'play';
+  const t = (k, l) => `<button class="${tab === k ? 'p' : ''}" onclick="go('${k}')">${l}</button>`;
+  A.innerHTML = `<div class="row" style="justify-content:space-between"><h1>Ladder <span style="color:#ff4d5a">/ Valorant</span></h1><div class="row">${t('play', 'Play')}${t('board', 'Leaderboard')}${isMod() ? t('mod', 'Moderator') : ''}${tk ? '<button onclick="out()">Sign out</button>' : ''}</div></div>` + ({ play, board, mod }[tab])();
+  const el = fid && document.getElementById(fid); if (el) { el.focus(); try { el.setSelectionRange(pos, pos); } catch (e) {} }
+  const lg = document.getElementById('log'); if (lg) lg.scrollTop = lg.scrollHeight;
+}
+load(true); setInterval(load, 2500);
+</script></body></html>

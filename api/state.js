@@ -10,6 +10,11 @@ const hash = (p, s) => crypto.scryptSync(p, s, 32).toString('hex');
 const rnd = () => crypto.randomBytes(16).toString('hex');
 const open = m => !['done', 'void'].includes(m.status);
 const busy = (s, id) => s.matches.some(m => open(m) && [...m.A, ...m.B].includes(id));
+const start = s => {
+  const ids = s.queue.splice(0, MIN).sort((a, c) => s.players[c].elo - s.players[a].elo), A = [], B = [];
+  ids.forEach((id, i) => (i % 4 == 0 || i % 4 == 3 ? A : B).push(id));
+  s.matches.push({ id: Date.now().toString(36), A, B, status: 'live', code: '', chat: [] });
+};
 const finish = (s, m) => {
   const win = m.winner === 'A' ? m.A : m.B, lose = m.winner === 'A' ? m.B : m.A;
   win.forEach(i => s.players[i].elo += 24);
@@ -27,7 +32,7 @@ module.exports = async (req, res) => {
       if (q.proof) return res.json({ shot: (s.players[q.proof] || {}).proof });
       const m = s.matches.find(x => x.id === q.shot); return res.json({ shot: m && m.shot });
     }
-    const pl = {}; for (const k in s.players) { const p = s.players[k]; pl[k] = { name: p.name, elo: p.elo, status: p.status, role: p.role || 'player' }; }
+    const pl = {}; for (const k in s.players) { const p = s.players[k]; pl[k] = { name: p.name, elo: p.elo, status: p.status, role: p.role || 'player', bot: !!p.bot }; }
     return res.json({ players: pl, queue: s.queue, min: MIN, matches: s.matches.map(({ shot, ...m }) => ({ ...m, hasShot: !!shot })) });
   }
   const b = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
@@ -35,7 +40,7 @@ module.exports = async (req, res) => {
   const m = s.matches.find(x => x.id === b.matchId);
   const loserLead = m && (m.winner === 'A' ? m.B[0] : m.A[0]);
   const isMod = authed && p.role === 'mod';
-  const MODS = ['review', 'resolve', 'setrole', 'ban', 'voidmatch', 'delmsg'];
+  const MODS = ['review', 'resolve', 'setrole', 'ban', 'voidmatch', 'delmsg', 'fillqueue', 'clearbots'];
   let err, extra = {};
   if (['join', 'leave', 'submit', 'confirm', 'dispute', 'say', 'announce', ...MODS].includes(b.type) && !authed) err = 'Please sign in again.';
   else if (MODS.includes(b.type) && !isMod) err = 'Moderators only.';
@@ -64,11 +69,7 @@ module.exports = async (req, res) => {
       if (p.status !== 'approved') { err = 'Your account is not verified yet.'; break; }
       if (!s.queue.includes(me) && !busy(s, me)) {
         s.queue.push(me);
-        if (s.queue.length >= MIN) {
-          const ids = s.queue.splice(0, MIN).sort((a, c) => s.players[c].elo - s.players[a].elo), A = [], B = [];
-          ids.forEach((id, i) => (i % 4 == 0 || i % 4 == 3 ? A : B).push(id));
-          s.matches.push({ id: Date.now().toString(36), A, B, status: 'live', code: '', chat: [] });
-        }
+        if (s.queue.length >= MIN) start(s);
       }
       break;
     case 'leave': s.queue = s.queue.filter(x => x !== me); break;
@@ -94,7 +95,7 @@ module.exports = async (req, res) => {
       if (m && m.status === 'submitted' && me === loserLead) m.status = 'disputed'; else err = 'Only the losing leader can dispute.';
       break;
     case 'resolve':
-      if (m && m.status === 'disputed') { if (b.uphold) finish(s, m); else m.status = 'void'; }
+      if (m && ['submitted', 'disputed'].includes(m.status)) { if (b.uphold) finish(s, m); else m.status = 'void'; }
       break;
     case 'setrole': {
       const q = s.players[b.target];
@@ -111,6 +112,22 @@ module.exports = async (req, res) => {
     }
     case 'voidmatch': if (m && open(m)) m.status = 'void'; else err = 'Match is not open.'; break;
     case 'delmsg': if (m) m.chat = m.chat.filter(x => x.i !== b.msgId); break;
+    case 'fillqueue': {
+      if (!s.queue.includes(me)) { err = 'Join the queue yourself first, then fill it.'; break; }
+      let i = 1;
+      while (s.queue.length < MIN) {
+        const k = 'bot' + i + '#test', n = 'Bot' + i + '#TEST'; i++;
+        if (s.queue.includes(k) || busy(s, k)) continue;
+        s.players[k] = s.players[k] || { name: n, elo: 1000, salt: rnd(), hash: rnd(), token: rnd(), status: 'approved', role: 'player', bot: true };
+        s.queue.push(k);
+      }
+      start(s);
+      break;
+    }
+    case 'clearbots':
+      Object.keys(s.players).filter(k => s.players[k].bot && !busy(s, k)).forEach(k => delete s.players[k]);
+      s.queue = s.queue.filter(k => s.players[k]);
+      break;
     default: err = 'Unknown action.';
   }
   if (!err) await r(['SET', 'ladder', JSON.stringify(s)]);

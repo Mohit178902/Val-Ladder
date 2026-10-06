@@ -78,7 +78,7 @@ function play() {
   return head + `<div class="card" style="width:100%;box-sizing:border-box"><div class="g"><div><h3>Team A</h3>${team(m.A)}</div><div><h3>Team B</h3>${team(m.B)}</div></div>${st}</div>` + chat(m);
 }
 function board() {
-  const r = Object.entries(S.players).filter(([k, v]) => v.status === 'approved').sort((a, b) => b[1].elo - a[1].elo);
+  const r = Object.entries(S.players).filter(([k, v]) => v.status === 'approved' && !v.bot).sort((a, b) => b[1].elo - a[1].elo);
   return `<div class="card" style="width:100%;box-sizing:border-box"><h2>Leaderboard</h2>${r.length ? r.map(([k, v], i) => `<div class="lb ${k === id() ? 'me' : ''}"><span>${i + 1}. ${esc(v.name)}</span><b>${v.elo}</b></div>`).join('') : '<div class="mut">No verified players yet.</div>'}</div>`;
 }
 function mod() {
@@ -87,11 +87,11 @@ function mod() {
   const img = k => shots[k] && shots[k].trim() && shots[k] !== 'loading' ? `<img src="${shots[k]}" alt="Screenshot">` : '';
   const box = c => `<div class="card" style="width:100%;box-sizing:border-box">${c}</div>`;
   const bt = (l, o, p) => `<button${p ? ' class="p"' : ''} onclick="act(${esc(JSON.stringify(o))})">${l}</button>`;
-  return `<div class="card" style="width:100%;box-sizing:border-box"><h2>Moderator</h2><h3>Accounts to verify</h3>` +
+  return `<div class="card" style="width:100%;box-sizing:border-box"><h2>Moderator</h2><h3>Test tools</h3><div class="mut">Join the queue on the Play tab first, then fill the empty spots with test players to start a match on your own.</div><div class="row">${bt('Fill queue with test players', { type: 'fillqueue' }, 1)}${bt('Remove test players', { type: 'clearbots' })}</div><h3>Accounts to verify</h3>` +
     (pend.length ? pend.map(([k, v]) => box(`<div>${esc(v.name)}</div>${img('p' + k)}<div class="row">${bt('Approve', { type: 'review', target: k, approve: true }, 1)}${bt('Reject', { type: 'review', target: k, approve: false })}</div>`)).join('') : '<div class="mut">No accounts waiting.</div>') +
     `<h3>Disputed matches</h3>` + (d.length ? d.map(x => box(`<div>Team ${x.winner} reports ${x.scoreW}-${x.scoreL}. Leaders: ${nm(x.A[0])} vs ${nm(x.B[0])}</div>${img('m' + x.id)}<div class="row">${bt('Uphold result', { type: 'resolve', matchId: x.id, uphold: true }, 1)}${bt('Void match', { type: 'resolve', matchId: x.id, uphold: false })}</div>`)).join('') : '<div class="mut">No disputed matches.</div>') +
-    `<h3>Open matches</h3>` + (live.length ? live.map(x => box(`<div>${nm(x.A[0])} vs ${nm(x.B[0])} (${x.status})</div><div class="chat">${x.chat.slice(-5).map(c => line(x, c)).join('') || '<span class="mut">No chat.</span>'}</div>${bt('Void match', { type: 'voidmatch', matchId: x.id })}`)).join('') : '<div class="mut">No open matches.</div>') +
-    `<h3>Players</h3>` + P.filter(([k]) => k !== id()).map(([k, v]) => `<div class="row lb" style="background:#0d1117"><span>${esc(v.name)} <span class="mut">${v.role}, ${v.status}</span></span><span class="row">` +
+    `<h3>Open matches</h3>` + (live.length ? live.map(x => box(`<div>${nm(x.A[0])} vs ${nm(x.B[0])} (${x.status})</div><div class="chat">${x.chat.slice(-5).map(c => line(x, c)).join('') || '<span class="mut">No chat.</span>'}</div>${x.status === 'submitted' ? bt('Uphold result', { type: 'resolve', matchId: x.id, uphold: true }, 1) : ''}${bt('Void match', { type: 'voidmatch', matchId: x.id })}`)).join('') : '<div class="mut">No open matches.</div>') +
+    `<h3>Players</h3>` + P.filter(([k, v]) => k !== id() && !v.bot).map(([k, v]) => `<div class="row lb" style="background:#0d1117"><span>${esc(v.name)} <span class="mut">${v.role}, ${v.status}</span></span><span class="row">` +
       (v.role === 'mod' ? bt('Remove moderator', { type: 'setrole', target: k, role: 'player' }) : bt('Make moderator', { type: 'setrole', target: k, role: 'mod' }) + (v.status === 'banned' ? bt('Unban', { type: 'ban', target: k, ban: false }) : bt('Ban', { type: 'ban', target: k, ban: true }))) + `</span></div>`).join('') + `</div>`;
 }
 function render() {

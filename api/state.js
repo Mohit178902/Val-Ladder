@@ -2,18 +2,30 @@ const crypto = require('crypto');
 const U = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
 const T = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
 const MIN = +process.env.MIN_PLAYERS || 10;
+const READY_MS = (+process.env.READY_SECONDS || 180) * 1000, PLAY_MS = (+process.env.PLAY_MINUTES || 25) * 60000;
 const BOOT = (process.env.MOD_BOOTSTRAP || '').toLowerCase().split(',').map(x => x.trim()).filter(Boolean);
 const RULES = 'keep the cheats off and no pauses only timeouts';
 const r = async c => (await (await fetch(U, { method: 'POST', headers: { Authorization: 'Bearer ' + T }, body: JSON.stringify(c) })).json()).result;
-const load = async () => { const v = await r(['GET', 'ladder']); return v ? JSON.parse(v) : { players: {}, queue: [], matches: [] }; };
+const load = async () => { const v = await r(['GET', 'ladder']); const s = v ? JSON.parse(v) : { players: {}, queue: [], matches: [] }; s.checks = s.checks || []; return s; };
 const hash = (p, s) => crypto.scryptSync(p, s, 32).toString('hex');
 const rnd = () => crypto.randomBytes(16).toString('hex');
 const open = m => !['done', 'void'].includes(m.status);
-const busy = (s, id) => s.matches.some(m => open(m) && [...m.A, ...m.B].includes(id));
-const start = s => {
-  const ids = s.queue.splice(0, MIN).sort((a, c) => s.players[c].elo - s.players[a].elo), A = [], B = [];
+const busy = (s, id) => s.matches.some(m => open(m) && [...m.A, ...m.B].includes(id)) || s.checks.some(c => c.players.includes(id));
+const makeCheck = s => {
+  const ids = s.queue.splice(0, MIN);
+  s.checks.push({ id: rnd().slice(0, 8), players: ids, ready: ids.filter(k => s.players[k].bot), deadline: Date.now() + READY_MS });
+};
+const startMatch = (s, c) => {
+  const ids = c.players.slice().sort((a, d) => s.players[d].elo - s.players[a].elo), A = [], B = [], now = Date.now();
   ids.forEach((id, i) => (i % 4 == 0 || i % 4 == 3 ? A : B).push(id));
-  s.matches.push({ id: Date.now().toString(36), A, B, status: 'live', code: '', chat: [] });
+  s.matches.push({ id: now.toString(36), A, B, status: 'live', code: '', chat: [], startedAt: now, playUntil: now + PLAY_MS });
+  s.checks = s.checks.filter(x => x !== c);
+};
+const tick = s => {
+  let ch = false;
+  for (const c of s.checks.slice()) if (Date.now() > c.deadline) { s.queue = [...c.ready, ...s.queue]; s.checks = s.checks.filter(x => x !== c); ch = true; }
+  while (s.queue.length >= MIN) { makeCheck(s); ch = true; }
+  return ch;
 };
 const finish = (s, m) => {
   const win = m.winner === 'A' ? m.A : m.B, lose = m.winner === 'A' ? m.B : m.A;
@@ -23,8 +35,9 @@ const finish = (s, m) => {
 };
 
 module.exports = async (req, res) => {
-  const s = await load();
+  const s = await load(), changed = tick(s);
   if (req.method === 'GET') {
+    if (changed) await r(['SET', 'ladder', JSON.stringify(s)]);
     const q = req.query;
     if (q.shot || q.proof) {
       const u = s.players[q.me];
@@ -33,16 +46,16 @@ module.exports = async (req, res) => {
       const m = s.matches.find(x => x.id === q.shot); return res.json({ shot: m && m.shot });
     }
     const pl = {}; for (const k in s.players) { const p = s.players[k]; pl[k] = { name: p.name, elo: p.elo, status: p.status, role: p.role || 'player', bot: !!p.bot }; }
-    return res.json({ players: pl, queue: s.queue, min: MIN, matches: s.matches.map(({ shot, ...m }) => ({ ...m, hasShot: !!shot })) });
+    return res.json({ players: pl, queue: s.queue, min: MIN, checks: s.checks, now: Date.now(), readyMs: READY_MS, playMs: PLAY_MS, matches: s.matches.map(({ shot, ...m }) => ({ ...m, hasShot: !!shot })) });
   }
   const b = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const me = b.me, p = s.players[me], authed = p && p.token && p.token === b.token;
   const m = s.matches.find(x => x.id === b.matchId);
   const loserLead = m && (m.winner === 'A' ? m.B[0] : m.A[0]);
   const isMod = authed && p.role === 'mod';
-  const MODS = ['review', 'resolve', 'setrole', 'ban', 'voidmatch', 'delmsg', 'fillqueue', 'clearbots'];
+  const MODS = ['review', 'resolve', 'setrole', 'ban', 'voidmatch', 'delmsg', 'fillqueue', 'clearbots', 'skiptimer'];
   let err, extra = {};
-  if (['join', 'leave', 'submit', 'confirm', 'dispute', 'say', 'announce', ...MODS].includes(b.type) && !authed) err = 'Please sign in again.';
+  if (['join', 'leave', 'submit', 'confirm', 'dispute', 'say', 'announce', 'ready', ...MODS].includes(b.type) && !authed) err = 'Please sign in again.';
   else if (MODS.includes(b.type) && !isMod) err = 'Moderators only.';
   else switch (b.type) {
     case 'register': {
@@ -69,9 +82,16 @@ module.exports = async (req, res) => {
       if (p.status !== 'approved') { err = 'Your account is not verified yet.'; break; }
       if (!s.queue.includes(me) && !busy(s, me)) {
         s.queue.push(me);
-        if (s.queue.length >= MIN) start(s);
+        while (s.queue.length >= MIN) makeCheck(s);
       }
       break;
+    case 'ready': {
+      const c = s.checks.find(x => x.id === b.checkId);
+      if (!c || !c.players.includes(me)) err = 'This ready check is over.';
+      else { if (!c.ready.includes(me)) c.ready.push(me); if (c.ready.length === c.players.length) startMatch(s, c); }
+      break;
+    }
+    case 'skiptimer': if (m && open(m)) m.playUntil = Date.now(); else err = 'Match is not open.'; break;
     case 'leave': s.queue = s.queue.filter(x => x !== me); break;
     case 'say':
       if (!m || !open(m) || ![...m.A, ...m.B].includes(me)) { err = 'You are not in this match.'; break; }
@@ -84,6 +104,7 @@ module.exports = async (req, res) => {
       break;
     case 'submit':
       if (!m || m.status !== 'live' || (me !== m.A[0] && me !== m.B[0])) { err = 'Only a team leader can report.'; break; }
+      if (Date.now() < (m.playUntil || 0)) { err = 'The match is still in play. Results open when the timer ends.'; break; }
       if (!(b.scoreW >= 13 && b.scoreW > b.scoreL && b.scoreL >= 0)) { err = 'Winner needs 13+ rounds and more than the other team.'; break; }
       if (!b.shot) { err = 'Upload the scoreboard screenshot.'; break; }
       Object.assign(m, { winner: me === m.A[0] ? 'A' : 'B', scoreW: b.scoreW, scoreL: b.scoreL, shot: b.shot, status: 'submitted' });
@@ -121,7 +142,7 @@ module.exports = async (req, res) => {
         s.players[k] = s.players[k] || { name: n, elo: 1000, salt: rnd(), hash: rnd(), token: rnd(), status: 'approved', role: 'player', bot: true };
         s.queue.push(k);
       }
-      start(s);
+      while (s.queue.length >= MIN) makeCheck(s);
       break;
     }
     case 'clearbots':
@@ -130,6 +151,6 @@ module.exports = async (req, res) => {
       break;
     default: err = 'Unknown action.';
   }
-  if (!err) await r(['SET', 'ladder', JSON.stringify(s)]);
+  if (!err || changed) await r(['SET', 'ladder', JSON.stringify(s)]);
   res.json({ ok: !err, err, ...extra });
 };

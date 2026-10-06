@@ -32,6 +32,7 @@ input{font:inherit;background:#0b0f14;border:1px solid #33414f;border-radius:10p
 .chat{width:100%;max-height:220px;overflow:auto;background:#0b0f14;border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:6px}.sys{color:#ff8a93}
 .lb{display:flex;justify-content:space-between;align-items:center;width:100%;padding:10px 14px;border-radius:10px;background:#0b0f14;gap:10px}.lb.me{background:#2a1a20;color:#ff8a93}
 .rk{font:700 22px 'Barlow Condensed';width:34px;color:var(--mut)}.t1 .rk{color:#ffd24d}.t2 .rk{color:#c9d4df}.t3 .rk{color:#d99a6c}
+.sb{position:fixed;right:18px;bottom:18px;z-index:20;border-radius:999px;box-shadow:0 6px 24px rgba(0,0,0,.5)}.sp{position:fixed;right:18px;bottom:18px;z-index:20;width:min(380px,calc(100vw - 36px));height:min(520px,calc(100vh - 36px));background:var(--card);border:1px solid var(--line);border-radius:16px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 6px 24px rgba(0,0,0,.5)}.sh{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-bottom:1px solid var(--line);gap:8px}.bub{max-width:88%;align-self:flex-start;background:#18222d;border-radius:12px;padding:8px 12px}.bub.u{align-self:flex-end;background:#2a1a20}
 .warn{background:#2a1a20;border:1px solid #5a2a33;border-radius:10px;padding:10px 14px;color:#ff8a93}
 img{max-width:100%;max-height:240px;border-radius:10px}
 @media(max-width:560px){.clock{font-size:60px}h2{font-size:28px}}
@@ -62,7 +63,7 @@ async function load(force) {
   const { now: _n, ...rest } = S, k = JSON.stringify(rest) + tab + me + tk + mode;
   if (force || k !== last) { last = k; render(); }
 }
-const go = t => { tab = t; render(); };
+const go = t => { tab = t; render(); if (t === 'mod') loadTix(); };
 const out = () => { tk = ''; localStorage.tk = ''; render(); };
 function pick(key) { return e => { const file = e.target.files[0]; if (!file) return;
   const im = new Image(); im.onload = () => { const k = Math.min(1, 900 / im.width), c = document.createElement('canvas'); c.width = im.width * k; c.height = im.height * k;
@@ -152,7 +153,7 @@ function mod() {
   const img = k => shots[k] && shots[k].trim() && shots[k] !== 'loading' ? `<img src="${shots[k]}" alt="Screenshot">` : '';
   const box = c => `<div class="card" style="background:#0b0f14">${c}</div>`;
   const bt = (l, o, p) => `<button${p ? ' class="p"' : ''} onclick="act(${esc(JSON.stringify(o))})">${l}</button>`;
-  return `<div class="card"><h2>Moderator</h2><h3>Test tools</h3><div class="mut">Join the queue on the Play tab first, then fill the empty spots with test players. Test players ready up on their own.</div><div class="row">${bt('Fill queue with test players', { type: 'fillqueue' }, 1)}${bt('Remove test players', { type: 'clearbots' })}</div><h3>Map pool</h3><div class="row" style="width:100%">${inp('pool', 'Maps, comma separated')}<button class="p" onclick="act({type:'setpool',maps:f.pool.split(',').map(x=>x.trim()).filter(Boolean)})">Save pool</button></div><div class="mut sm">Applies to new matches.</div><h3>Accounts to verify</h3>` +
+  return `<div class="card"><h2>Moderator</h2><h3>Test tools</h3><div class="mut">Join the queue on the Play tab first, then fill the empty spots with test players. Test players ready up on their own.</div><div class="row">${bt('Fill queue with test players', { type: 'fillqueue' }, 1)}${bt('Remove test players', { type: 'clearbots' })}</div><h3>Map pool</h3><div class="row" style="width:100%">${inp('pool', 'Maps, comma separated')}<button class="p" onclick="act({type:'setpool',maps:f.pool.split(',').map(x=>x.trim()).filter(Boolean)})">Save pool</button></div><div class="mut sm">Applies to new matches.</div>${supSection()}<h3>Accounts to verify</h3>` +
     (pend.length ? pend.map(([k, v]) => box(`<div>${esc(v.name)}</div>${img('p' + k)}<div class="row">${bt('Approve', { type: 'review', target: k, approve: true }, 1)}${bt('Reject', { type: 'review', target: k, approve: false })}</div>`)).join('') : '<div class="mut">No accounts waiting.</div>') +
     `<h3>Disputed matches</h3>` + (d.length ? d.map(x => box(`<div>Team ${x.winner} reports ${x.scoreW}-${x.scoreL}. Leaders: ${nm(x.A[0])} vs ${nm(x.B[0])}</div>${img('m' + x.id)}<div class="row">${bt('Uphold result', { type: 'resolve', matchId: x.id, uphold: true }, 1)}${bt('Void match', { type: 'resolve', matchId: x.id, uphold: false })}</div>`)).join('') : '<div class="mut">No disputed matches.</div>') +
     `<h3>Open matches</h3>` + (live.length ? live.map(x => box(`<div>${nm(x.A[0])} vs ${nm(x.B[0])} (${x.status}${x.phase && x.phase !== 'play' ? ', ' + x.phase : ''})</div><div class="chat">${x.chat.slice(-5).map(c => line(x, c)).join('') || '<span class="mut">No chat.</span>'}</div><div class="row">${x.status === 'live' && (x.phase || 'play') === 'play' && now() < x.playUntil ? bt('End timer early', { type: 'skiptimer', matchId: x.id }) : ''}${x.status === 'submitted' ? bt('Uphold result', { type: 'resolve', matchId: x.id, uphold: true }, 1) : ''}${bt('Void match', { type: 'voidmatch', matchId: x.id })}</div>`)).join('') : '<div class="mut">No open matches.</div>') +
@@ -169,6 +170,50 @@ function render() {
   const el = fid && document.getElementById(fid); if (el) { el.focus(); try { el.setSelectionRange(pos, pos); } catch (e) {} }
   ['log', 'tlog'].forEach(k => { const lg = document.getElementById(k); if (lg) lg.scrollTop = lg.scrollHeight; });
   tickUI();
+  if (SU.dataset.k !== String(!!tk)) { SU.dataset.k = String(!!tk); supShell(); supPoll(); }
 }
-load(true); setInterval(() => { if (!document.hidden) load(); }, 4000); setInterval(tickUI, 1000);
+const SU = document.createElement('div'); document.body.appendChild(SU);
+let sup = { open: false, msgs: [], busy: false, t: null }, allTix = [];
+const sapi = async o => { try { return await (await fetch('/api/support', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ me: id(), token: tk, ...o }) })).json(); } catch (e) { return { ok: false, err: 'Network error.' }; } };
+function supShell() {
+  if (!tk || !S || !S.players[id()]) { SU.innerHTML = ''; return; }
+  const tkt = sup.t, badge = tkt && tkt.thread.some(x => x.who === 'admin') ? ' (new reply)' : '';
+  SU.innerHTML = !sup.open ? `<button class="p sb" onclick="supToggle()">Help${badge}</button>` :
+    `<div class="sp"><div class="sh"><b>${tkt ? 'Your support ticket' : 'Help'}</b><span class="row">${tkt ? '<button class="s" onclick="supClose()">Mark solved</button>' : ''}<button class="s" onclick="supToggle()">Hide</button></span></div><div class="chat" id="slog" style="flex:1;max-height:none;border-radius:0"></div><div class="row" style="padding:10px;flex-wrap:nowrap"><input id="sin" style="flex:1;min-width:0" placeholder="${tkt ? 'Message the admins' : 'Describe your problem'}" onkeydown="if(event.key==='Enter')supSend()" aria-label="Support message"><button class="p" onclick="supSend()">Send</button></div></div>`;
+  supLog();
+}
+function supLog() {
+  const el = document.getElementById('slog'); if (!el) return;
+  const bub = (c, w, x) => `<div class="bub ${c}"><b>${esc(w)}</b> ${esc(x)}</div>`;
+  el.innerHTML = sup.t ? sup.t.thread.map(x => bub(x.who === 'player' ? 'u' : '', x.who === 'player' ? 'You' : x.who === 'admin' ? 'Admin ' + x.name : 'Support bot', x.t)).join('') + '<div class="mut sm">An admin will reply here.</div>'
+    : bub('', 'Support bot', 'Hi! Tell me what is wrong. I will help, or pass it to an admin if needed.') + sup.msgs.map(m => bub(m.role === 'user' ? 'u' : '', m.role === 'user' ? 'You' : 'Support bot', m.content)).join('') + (sup.busy ? '<div class="mut sm">Thinking...</div>' : '');
+  el.scrollTop = el.scrollHeight;
+}
+function supToggle() { sup.open = !sup.open; supShell(); if (sup.open) { const i = document.getElementById('sin'); if (i) i.focus(); } }
+async function supPoll() {
+  if (!tk) return; const j = await sapi({ type: 'mine' }); if (!j.ok) return;
+  const had = !!sup.t, prev = JSON.stringify(sup.t); sup.t = j.ticket;
+  if (JSON.stringify(j.ticket) !== prev) { if (!!sup.t !== had || !sup.open) supShell(); else supLog(); }
+}
+async function supClose() { if (!sup.t) return; await sapi({ type: 'close', ticketId: sup.t.id }); sup.msgs = []; await supPoll(); }
+async function supSend() {
+  const el = document.getElementById('sin'), text = el ? el.value.trim() : ''; if (!text || sup.busy) return; el.value = '';
+  if (sup.t) { const j = await sapi({ type: 'say', text }); if (j.ok) await supPoll(); else alert(j.err); return; }
+  sup.msgs.push({ role: 'user', content: text }); sup.busy = true; supLog();
+  const j = await sapi({ type: 'ask', messages: sup.msgs }); sup.busy = false;
+  if (!j.ok) { sup.msgs.push({ role: 'assistant', content: j.err || 'Something went wrong. Please try again.' }); supLog(); return; }
+  sup.msgs.push({ role: 'assistant', content: j.reply });
+  if (j.ticket) { await supPoll(); supShell(); } else supLog();
+}
+async function loadTix(force) {
+  if (!tk) return; const j = await sapi({ type: 'list' }); if (!j.ok) return;
+  if (force || JSON.stringify(j.tickets) !== JSON.stringify(allTix)) { allTix = j.tickets; render(); }
+}
+async function tixReply(k) { const text = (f['r_' + k] || '').trim(); if (!text) return; const j = await sapi({ type: 'reply', ticketId: k, text }); if (j.ok) { f['r_' + k] = ''; loadTix(true); } else alert(j.err); }
+async function tixClose(k) { await sapi({ type: 'close', ticketId: k }); loadTix(true); }
+function supSection() {
+  const col = { high: 'var(--red)', normal: 'var(--blue)', low: 'var(--mut)' };
+  return '<h3>Support tickets</h3>' + (allTix.length ? allTix.map(t => `<div class="card" style="background:#0b0f14"><div class="row"><b>${esc(t.name)}</b><span class="chip" style="color:${col[t.urgency]}">${esc(t.urgency)}</span></div><div>${esc(t.summary)}</div><div class="chat">${t.thread.slice(-6).map(x => `<div><b>${esc(x.who === 'player' ? t.name : x.who === 'admin' ? 'Admin ' + x.name : 'Bot')}</b> ${esc(x.t)}</div>`).join('')}</div><div class="row" style="width:100%">${inp('r_' + t.id, 'Reply to player')}<button class="p" onclick="tixReply('${t.id}')">Reply</button><button onclick="tixClose('${t.id}')">Close ticket</button></div></div>`).join('') : '<div class="mut">No open tickets.</div>');
+}
+load(true); setInterval(() => { if (!document.hidden) load(); }, 4000); setInterval(tickUI, 1000); setInterval(() => { if (!document.hidden && tk) { supPoll(); if (tab === 'mod' && isMod()) loadTix(); } }, 8000);
 </script></body></html>

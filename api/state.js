@@ -10,6 +10,8 @@ const RULES = 'keep the cheats off and no pauses only timeouts';
 const r = async c => (await (await fetch(U, { method: 'POST', headers: { Authorization: 'Bearer ' + T }, body: JSON.stringify(c) })).json()).result;
 const load = async () => { const v = await r(['GET', 'ladder']); const s = v ? JSON.parse(v) : { players: {}, queue: [], matches: [] }; s.checks = s.checks || []; return s; };
 const hash = (p, s) => crypto.scryptSync(p, s, 32).toString('hex');
+const TTL = (+process.env.SHOT_DAYS || 14) * 86400;
+const put = (k, v, ttl) => r(['SET', k, v, 'EX', ttl || TTL]);
 const rnd = () => crypto.randomBytes(16).toString('hex');
 const open = m => !['done', 'void'].includes(m.status);
 const busy = (s, id) => s.matches.some(m => open(m) && [...m.A, ...m.B].includes(id)) || s.checks.some(c => c.players.includes(id));
@@ -42,6 +44,14 @@ const tick = s => {
   while (s.queue.length >= MIN) { makeCheck(s); ch = true; }
   return ch;
 };
+const migrate = async s => {
+  let ch = false;
+  for (const m of s.matches) if (m.shot) { await put('shot:' + m.id, m.shot); m.hasShot = true; delete m.shot; ch = true; }
+  for (const k in s.players) { const p = s.players[k]; if (p.proof) { await put('proof:' + k, p.proof, 2592000); p.hasProof = true; delete p.proof; ch = true; } }
+  const keep = [...s.matches.filter(open), ...s.matches.filter(m => !open(m)).slice(-20)];
+  if (keep.length !== s.matches.length) { s.matches = keep; ch = true; }
+  return ch;
+};
 const finish = (s, m) => {
   const win = m.winner === 'A' ? m.A : m.B, lose = m.winner === 'A' ? m.B : m.A;
   win.forEach(i => s.players[i].elo += 24);
@@ -50,19 +60,21 @@ const finish = (s, m) => {
 };
 
 module.exports = async (req, res) => {
-  const s = await load(), changed = tick(s);
+  const s = await load();
+  let changed = tick(s);
+  if (await migrate(s)) changed = true;
   if (req.method === 'GET') {
     if (changed) await r(['SET', 'ladder', JSON.stringify(s)]);
     const q = req.query;
     if (q.shot || q.proof) {
       const u = s.players[q.me];
       if (!u || u.role !== 'mod' || u.token !== q.token) return res.status(403).json({});
-      if (q.proof) return res.json({ shot: (s.players[q.proof] || {}).proof });
-      const m = s.matches.find(x => x.id === q.shot); return res.json({ shot: m && m.shot });
+      if (q.proof) return res.json({ shot: (await r(['GET', 'proof:' + q.proof])) || (s.players[q.proof] || {}).proof });
+      const m = s.matches.find(x => x.id === q.shot); return res.json({ shot: (await r(['GET', 'shot:' + q.shot])) || (m && m.shot) });
     }
     const usr = s.players[q.me], who = usr && usr.token === q.token ? q.me : null, isM = who && usr.role === 'mod';
     const view = m => {
-      const { shot, tchat, veto, chat, ...x } = m, votes = (veto && veto.votes) || {}, o = { ...x, hasShot: !!shot };
+      const { shot, tchat, veto, chat, ...x } = m, votes = (veto && veto.votes) || {}, o = { ...x, hasShot: !!(shot || m.hasShot) };
       const team = who && m.A.includes(who) ? 'A' : who && m.B.includes(who) ? 'B' : null;
       if (veto) o.veto = { ...veto, votes: undefined };
       if (team || isM) o.chat = chat || [];
@@ -90,9 +102,10 @@ module.exports = async (req, res) => {
       const id = (b.name || '').toLowerCase();
       if (!/^.{3,24}#.{2,8}$/.test(b.name || '')) err = 'Use the format Name#TAG.';
       else if ((b.password || '').length < 6) err = 'Password needs at least 6 characters.';
+      else if (String(b.proof || '').length > 900000) err = 'That image is too large.';
       else if (!b.proof && !BOOT.includes(id)) err = 'Upload a screenshot of your Valorant profile for verification.';
       else if (s.players[id]) err = 'That Riot ID is already registered.';
-      else { const salt = rnd(); s.players[id] = { name: b.name, elo: 1000, salt, hash: hash(b.password, salt), token: rnd(), status: BOOT.includes(id) ? 'approved' : 'pending', role: BOOT.includes(id) ? 'mod' : 'player', proof: b.proof || '' }; extra.token = s.players[id].token; }
+      else { const salt = rnd(); s.players[id] = { name: b.name, elo: 1000, salt, hash: hash(b.password, salt), token: rnd(), status: BOOT.includes(id) ? 'approved' : 'pending', role: BOOT.includes(id) ? 'mod' : 'player', hasProof: !!b.proof }; if (b.proof) await put('proof:' + id, b.proof, 2592000); extra.token = s.players[id].token; }
       break;
     }
     case 'login': {
@@ -103,7 +116,7 @@ module.exports = async (req, res) => {
     }
     case 'review': {
       const q = s.players[b.target];
-      if (q && q.status === 'pending') { q.status = b.approve ? 'approved' : 'rejected'; q.proof = ''; }
+      if (q && q.status === 'pending') { q.status = b.approve ? 'approved' : 'rejected'; delete q.proof; q.hasProof = false; await r(['DEL', 'proof:' + b.target]); }
       break;
     }
     case 'join':
@@ -163,11 +176,12 @@ module.exports = async (req, res) => {
       if (!m || m.status !== 'live' || (me !== m.A[0] && me !== m.B[0])) { err = 'Only a team leader can report.'; break; }
       if ((m.phase && m.phase !== 'play') || Date.now() < (m.playUntil || 0)) { err = 'The match is not over yet. Results open when the timer ends.'; break; }
       if (!(b.scoreW >= 13 && b.scoreW > b.scoreL && b.scoreL >= 0)) { err = 'Winner needs 13+ rounds and more than the other team.'; break; }
-      if (!b.shot) { err = 'Upload the scoreboard screenshot.'; break; }
-      Object.assign(m, { winner: me === m.A[0] ? 'A' : 'B', scoreW: b.scoreW, scoreL: b.scoreL, shot: b.shot, status: 'submitted' });
+      if (!b.shot || String(b.shot).length > 900000) { err = 'Upload a scoreboard screenshot (it is missing or too large).'; break; }
+      await put('shot:' + m.id, b.shot);
+      Object.assign(m, { winner: me === m.A[0] ? 'A' : 'B', scoreW: b.scoreW, scoreL: b.scoreL, hasShot: true, status: 'submitted' });
       break;
     case 'confirm':
-      if (m && m.status === 'submitted' && me === loserLead) finish(s, m); else err = 'Only the losing leader can confirm.';
+      if (m && m.status === 'submitted' && me === loserLead) { finish(s, m); m.hasShot = false; await r(['DEL', 'shot:' + m.id]); } else err = 'Only the losing leader can confirm.';
       break;
     case 'dispute':
       if (m && m.status === 'submitted' && me === loserLead) m.status = 'disputed'; else err = 'Only the losing leader can dispute.';

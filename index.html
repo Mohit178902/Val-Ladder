@@ -144,7 +144,9 @@ function play() {
 }
 function board() {
   const r = Object.entries(S.players).filter(([k, v]) => v.status === 'approved' && !v.bot).sort((a, b) => b[1].elo - a[1].elo);
-  return `<div class="card"><h2>Leaderboard</h2>${r.length ? r.map(([k, v], i) => `<div class="lb t${i + 1} ${k === id() ? 'me' : ''}"><span class="row" style="flex-wrap:nowrap"><span class="rk">${i + 1}</span>${av(k)}<b>${esc(v.name)}</b></span><b>${v.elo}</b></div>`).join('') : '<div class="mut">No verified players yet.</div>'}</div>`;
+  const row = ([k, v], i) => `<div class="lb t${i + 1} ${k === id() ? 'me' : ''}"><span class="row" style="flex-wrap:nowrap"><span class="rk">${i + 1}</span>${av(k)}<b>${esc(v.name)}</b></span><b>${v.elo}</b></div>`;
+  const mi = r.findIndex(x => x[0] === id());
+  return `<div class="card"><h2>Top 100</h2>${r.length ? r.slice(0, 100).map(row).join('') : '<div class="mut">No verified players yet.</div>'}` + (mi >= 100 ? `<div class="mut sm">Your rank</div>${row(r[mi], mi)}` : '') + `</div>`;
 }
 function mod() {
   if (f.pool === undefined) f.pool = S.pool.join(', ');

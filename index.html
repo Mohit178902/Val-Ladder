@@ -63,7 +63,7 @@ async function load(force) {
   const { now: _n, ...rest } = S, k = JSON.stringify(rest) + tab + me + tk + mode;
   if (force || k !== last) { last = k; render(); }
 }
-const go = t => { tab = t; render(); if (t === 'mod') loadTix(); };
+const go = t => { tab = t; render(); if (t === 'mod') loadTix(); if (t === 'hist') loadHist(); };
 const out = () => { tk = ''; localStorage.tk = ''; render(); };
 function pick(key) { return e => { const file = e.target.files[0]; if (!file) return;
   const im = new Image(); im.onload = () => { const k = Math.min(1, 900 / im.width), c = document.createElement('canvas'); c.width = im.width * k; c.height = im.height * k;
@@ -142,6 +142,21 @@ function play() {
   if (m.status === 'disputed') st = `<div class="card mut">A moderator is reviewing this match.</div>`;
   return head + info(m) + `<div class="g">${teamCol(m.A, 'var(--red)', 'Team A')}${teamCol(m.B, 'var(--blue)', 'Team B')}</div>${st}` + chat(m) + tchatCard(m);
 }
+let hist = null;
+async function loadHist() {
+  if (!tk) return;
+  try { const j = await (await fetch('/api/state?hist=1&me=' + encodeURIComponent(id()) + '&token=' + tk)).json(); hist = j.hist || []; } catch (e) { hist = []; }
+  render();
+}
+function histView() {
+  if (!tk) return auth();
+  if (hist === null) return '<div class="card"><h2>Match history</h2><div class="mut">Loading...</div></div>';
+  if (!hist.length) return '<div class="card"><h2>Match history</h2><div class="mut">No finished matches yet. Your last 30 will show up here.</div></div>';
+  return '<div class="card"><h2>Match history</h2><div class="mut sm">Your last 30 matches.</div>' + hist.map(m => {
+    const mine = m.team === 'A' ? m.A : m.B, opp = m.team === 'A' ? m.B : m.A, v = m.res === 'void';
+    return `<div class="tile" style="width:100%;border-color:${v ? 'var(--line)' : m.win ? 'var(--ok)' : '#5a2a33'}"><div class="row" style="justify-content:space-between"><span class="row"><span class="chip ${m.win ? 'ok' : ''}">${v ? 'Voided' : m.win ? 'Win' : 'Loss'}</span><b>${esc(m.map || 'Map not set')}</b>${v ? '' : `<span class="mut">${m.win ? m.sw + '-' + m.sl : m.sl + '-' + m.sw}</span>`}</span><span class="mut sm">${new Date(m.at).toLocaleString()}</span></div>${v ? '<div class="mut sm">No Elo change.</div>' : `<div class="sm">Elo <b style="color:${m.d >= 0 ? 'var(--ok)' : '#ff8a93'}">${m.d >= 0 ? '+' : ''}${m.d}</b> <span class="mut">(now ${m.e})</span></div>`}<div class="mut sm">Your team: ${mine.map(esc).join(', ')}</div><div class="mut sm">Opponents: ${opp.map(esc).join(', ')}</div></div>`;
+  }).join('') + '</div>';
+}
 function board() {
   const r = Object.entries(S.players).filter(([k, v]) => v.status === 'approved' && !v.bot).sort((a, b) => b[1].elo - a[1].elo);
   const row = ([k, v], i) => `<div class="lb t${i + 1} ${k === id() ? 'me' : ''}"><span class="row" style="flex-wrap:nowrap"><span class="rk">${i + 1}</span>${av(k)}<b>${esc(v.name)}</b></span><b>${v.elo}</b></div>`;
@@ -167,8 +182,8 @@ function render() {
   const ae = document.activeElement, fid = ae && ae.id, pos = ae && ae.selectionStart;
   if (tab === 'mod' && !isMod()) tab = 'play';
   const t = (k, l) => `<button class="${tab === k ? 'on' : ''}" onclick="go('${k}')">${l}</button>`;
-  H.innerHTML = `<div class="in"><h1>Ladder <span style="color:var(--red)">/ Valorant</span></h1><div class="row"><div class="tabs">${t('play', 'Play')}${t('board', 'Leaderboard')}${isMod() ? t('mod', 'Moderator') : ''}</div>${tk ? '<button onclick="out()">Sign out</button>' : ''}</div></div>`;
-  A.innerHTML = ({ play, board, mod }[tab])();
+  H.innerHTML = `<div class="in"><h1>Ladder <span style="color:var(--red)">/ Valorant</span></h1><div class="row"><div class="tabs">${t('play', 'Play')}${t('board', 'Leaderboard')}${tk ? t('hist', 'History') : ''}${isMod() ? t('mod', 'Moderator') : ''}</div>${tk ? '<button onclick="out()">Sign out</button>' : ''}</div></div>`;
+  A.innerHTML = ({ play, board, hist: histView, mod }[tab])();
   const el = fid && document.getElementById(fid); if (el) { el.focus(); try { el.setSelectionRange(pos, pos); } catch (e) {} }
   ['log', 'tlog'].forEach(k => { const lg = document.getElementById(k); if (lg) lg.scrollTop = lg.scrollHeight; });
   tickUI();

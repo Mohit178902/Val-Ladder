@@ -52,11 +52,26 @@ const migrate = async s => {
   if (keep.length !== s.matches.length) { s.matches = keep; ch = true; }
   return ch;
 };
+const HQ = new WeakMap();
+const note = (s, m, res, dl) => {
+  if (!HQ.has(s)) HQ.set(s, []);
+  const nm = k => (s.players[k] ? s.players[k].name : k);
+  [['A', m.A], ['B', m.B]].forEach(([team, ids]) => ids.forEach(k => {
+    if (!s.players[k] || s.players[k].bot) return;
+    HQ.get(s).push([k, { id: m.id, at: Date.now(), res, map: m.map || '', team, win: res === 'done' && m.winner === team, sw: m.scoreW, sl: m.scoreL, d: (dl || {})[k] || 0, e: s.players[k].elo, A: m.A.map(nm), B: m.B.map(nm) }]);
+  }));
+};
+const flush = async s => {
+  const h = HQ.get(s); if (!h || !h.length) return;
+  const cmds = []; h.forEach(([k, e]) => cmds.push(['LPUSH', 'hist:' + k, JSON.stringify(e)], ['LTRIM', 'hist:' + k, 0, 29]));
+  HQ.delete(s);
+  try { await fetch(U.replace(/\/$/, '') + '/pipeline', { method: 'POST', headers: { Authorization: 'Bearer ' + T }, body: JSON.stringify(cmds) }); } catch (e) {}
+};
 const finish = (s, m) => {
-  const win = m.winner === 'A' ? m.A : m.B, lose = m.winner === 'A' ? m.B : m.A;
-  win.forEach(i => s.players[i].elo += 24);
-  lose.forEach(i => s.players[i].elo = Math.max(0, s.players[i].elo - 24));
-  m.status = 'done';
+  const win = m.winner === 'A' ? m.A : m.B, lose = m.winner === 'A' ? m.B : m.A, dl = {};
+  win.forEach(i => { dl[i] = 24; s.players[i].elo += 24; });
+  lose.forEach(i => { const b = s.players[i].elo; s.players[i].elo = Math.max(0, b - 24); dl[i] = s.players[i].elo - b; });
+  m.status = 'done'; note(s, m, 'done', dl);
 };
 
 module.exports = async (req, res) => {
@@ -66,6 +81,10 @@ module.exports = async (req, res) => {
   if (req.method === 'GET') {
     if (changed) await r(['SET', 'ladder', JSON.stringify(s)]);
     const q = req.query;
+    if (q.hist) {
+      const u = s.players[q.me]; if (!u || !u.token || u.token !== q.token) return res.status(403).json({});
+      return res.json({ hist: ((await r(['LRANGE', 'hist:' + q.me, 0, 29])) || []).map(x => JSON.parse(x)) });
+    }
     if (q.shot || q.proof) {
       const u = s.players[q.me];
       if (!u || u.role !== 'mod' || u.token !== q.token) return res.status(403).json({});
@@ -187,7 +206,7 @@ module.exports = async (req, res) => {
       if (m && m.status === 'submitted' && me === loserLead) m.status = 'disputed'; else err = 'Only the losing leader can dispute.';
       break;
     case 'resolve':
-      if (m && ['submitted', 'disputed'].includes(m.status)) { if (b.uphold) finish(s, m); else m.status = 'void'; }
+      if (m && ['submitted', 'disputed'].includes(m.status)) { if (b.uphold) finish(s, m); else { m.status = 'void'; note(s, m, 'void'); } }
       break;
     case 'setrole': {
       const q = s.players[b.target];
@@ -202,7 +221,7 @@ module.exports = async (req, res) => {
       else q.status = q.was && q.was !== 'banned' ? q.was : 'approved';
       break;
     }
-    case 'voidmatch': if (m && open(m)) m.status = 'void'; else err = 'Match is not open.'; break;
+    case 'voidmatch': if (m && open(m)) { m.status = 'void'; note(s, m, 'void'); } else err = 'Match is not open.'; break;
     case 'delmsg': if (m) m.chat = m.chat.filter(x => x.i !== b.msgId); break;
     case 'fillqueue': {
       if (!s.queue.includes(me)) { err = 'Join the queue yourself first, then fill it.'; break; }
@@ -223,5 +242,6 @@ module.exports = async (req, res) => {
     default: err = 'Unknown action.';
   }
   if (!err || changed) await r(['SET', 'ladder', JSON.stringify(s)]);
+  if (!err) await flush(s);
   res.json({ ok: !err, err, ...extra });
 };

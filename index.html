@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ladder</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ladder / Valorant</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500&display=swap">
 <style>
 :root{--bg:#0b0f14;--card:#121922;--line:#1f2a36;--tx:#e8edf2;--mut:#8b99a8;--red:#ff4d5a;--blue:#4db8ff;--ok:#3ddc97}
@@ -34,6 +34,7 @@ input{font:inherit;background:#0b0f14;border:1px solid #33414f;border-radius:10p
 .rk{font:700 22px 'Barlow Condensed';width:34px;color:var(--mut)}.t1 .rk{color:#ffd24d}.t2 .rk{color:#c9d4df}.t3 .rk{color:#d99a6c}
 .sb{position:fixed;right:18px;bottom:18px;z-index:20;border-radius:999px;box-shadow:0 6px 24px rgba(0,0,0,.5)}.sp{position:fixed;right:18px;bottom:18px;z-index:20;width:min(380px,calc(100vw - 36px));height:min(520px,calc(100vh - 36px));background:var(--card);border:1px solid var(--line);border-radius:16px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 6px 24px rgba(0,0,0,.5)}.sh{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-bottom:1px solid var(--line);gap:8px}.bub{max-width:88%;align-self:flex-start;background:#18222d;border-radius:12px;padding:8px 12px}.bub.u{align-self:flex-end;background:#2a1a20}
 .rules ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:8px}.rules li{line-height:1.45}
+#toasts{position:fixed;left:50%;transform:translateX(-50%);bottom:18px;z-index:30;display:flex;flex-direction:column;gap:8px;width:min(440px,calc(100vw - 36px));pointer-events:none}.toast{background:var(--card);border:1px solid #33414f;border-left:4px solid var(--blue);border-radius:10px;padding:10px 14px;box-shadow:0 6px 24px rgba(0,0,0,.5);pointer-events:auto}.toast.err{border-left-color:var(--red)}.toast.ok{border-left-color:var(--ok)}
 .warn{background:#2a1a20;border:1px solid #5a2a33;border-radius:10px;padding:10px 14px;color:#ff8a93}
 img{max-width:100%;max-height:240px;border-radius:10px}
 @media(max-width:560px){.clock{font-size:60px}h2{font-size:28px}}
@@ -46,21 +47,78 @@ const nm = i => esc(S.players[i] ? S.players[i].name : i), now = () => Date.now(
 const fmt = ms => { ms = Math.max(0, Math.ceil(ms / 1000)); return String(Math.floor(ms / 60)).padStart(2, '0') + ':' + String(ms % 60).padStart(2, '0'); };
 const av = k => `<div class="av">${esc((S.players[k] ? S.players[k].name : '?')[0].toUpperCase())}</div>`;
 const isMod = () => S.players[id()] && S.players[id()].role === 'mod';
+let since = 0, flip = false, lastAdmin = -1, ac = null, seen = { check: '', turn: '', side: '' };
+const TS = document.createElement('div'); TS.id = 'toasts'; TS.setAttribute('aria-live', 'polite'); document.body.appendChild(TS);
+function toast(msg, kind, ms) { const d = document.createElement('div'); d.className = 'toast ' + (kind || 'info'); d.textContent = msg; TS.appendChild(d); setTimeout(() => d.remove(), ms || 4500); }
+const toastErr = m => toast(m, 'err', 6500);
+const OK = { join: 'Joined the queue', leave: 'Left the queue', ready: 'You are ready', submit: 'Result submitted', vote: 'Vote saved', confirm: 'Result confirmed', dispute: 'Dispute sent to the moderators', mapban: 'Map banned', pickside: 'Side chosen', announce: 'Party code announced', setpool: 'Map pool saved', setrank: 'Rank updated' };
+const muted = () => localStorage.mute === '1';
+function unlockAudio() { try { ac = ac || new (window.AudioContext || window.webkitAudioContext)(); if (ac.state === 'suspended') ac.resume(); } catch (e) {} }
+function beep() {
+  if (!ac || muted()) return;
+  try { const t0 = ac.currentTime; [880, 1175, 1568].forEach((fr, i) => { const o = ac.createOscillator(), g = ac.createGain(), t = t0 + i * .18; o.type = 'sine'; o.frequency.value = fr; g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(.25, t + .02); g.gain.exponentialRampToValueAtTime(.0001, t + .16); o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t + .18); }); } catch (e) {}
+}
+function ping(title, body) {
+  toast(title + ' ' + body, 'info', 8000); beep();
+  try { if (window.Notification && Notification.permission === 'granted' && document.hidden) { const n = new Notification(title, { body, tag: 'ladder-' + title }); n.onclick = () => { window.focus(); n.close(); }; } } catch (e) {}
+}
+document.addEventListener('click', unlockAudio);
+function enableAlerts() {
+  unlockAudio(); let fired = false;
+  const done = () => { if (fired) return; fired = true; beep(); toast('Alerts are on. You will get a sound and a notification when your match is found.', 'ok', 6000); render(); };
+  try { const r = Notification.requestPermission(done); if (r && r.then) r.then(done); } catch (e) { done(); }
+}
+function toggleSound() { localStorage.mute = muted() ? '' : '1'; if (!muted()) { unlockAudio(); beep(); } render(); }
+function alertBtn() {
+  const perm = window.Notification ? Notification.permission : 'denied';
+  if (perm === 'default') return '<button onclick="enableAlerts()">Enable alerts</button>';
+  return `<button onclick="toggleSound()" aria-pressed="${!muted()}">Sound ${muted() ? 'off' : 'on'}</button>`;
+}
+const mineMatch = () => S.matches.find(x => ['veto', 'live', 'submitted', 'disputed'].includes(x.status) && [...x.A, ...x.B].includes(id()));
+function notifyChanges() {
+  if (!tk || !S || !S.players[id()]) return;
+  const c = S.checks.find(x => x.players.includes(id())), m = mineMatch();
+  if (c && !c.ready.includes(id())) { if (seen.check !== c.id) { seen.check = c.id; ping('Match found!', 'Press Ready within ' + dur(S.readyMs || 90000) + '.'); } } else if (!c) seen.check = '';
+  const tk2 = m && m.phase === 'veto' && m[m.veto.turn][0] === id() ? m.id + ':' + m.veto.bans.length : '';
+  if (tk2 && seen.turn !== tk2) { seen.turn = tk2; ping('Your turn to ban a map.', 'Pick one before the timer ends.'); } else if (!tk2) seen.turn = '';
+  const sk = m && m.phase === 'side' && m.B[0] === id() ? m.id : '';
+  if (sk && seen.side !== sk) { seen.side = sk; ping('Choose attack or defense.', 'Your team picks the side.'); } else if (!sk) seen.side = '';
+}
+function titleTick() {
+  flip = !flip; const base = 'Ladder / Valorant';
+  if (!tk || !S || !S.players[id()]) { document.title = base; return; }
+  const c = S.checks.find(x => x.players.includes(id())), m = mineMatch();
+  let msg = '', until = 0;
+  if (c && !c.ready.includes(id())) { msg = flip ? 'MATCH FOUND!' : 'READY UP'; until = c.deadline; }
+  else if (m && m.phase === 'veto' && m[m.veto.turn][0] === id()) { msg = flip ? 'YOUR TURN' : 'BAN A MAP'; until = m.veto.deadline; }
+  else if (m && m.phase === 'side' && m.B[0] === id()) { msg = flip ? 'YOUR TURN' : 'PICK A SIDE'; until = m.veto.deadline; }
+  document.title = msg ? msg + ' ' + fmt(until - now()) : base;
+}
+function pollEvery() {
+  if (!S) return 3;
+  if (!tk || !S.players[id()]) return 15;
+  const m = mineMatch(), c = S.checks.some(x => x.players.includes(id()));
+  if (c || (m && ['veto', 'side'].includes(m.phase))) return 2;
+  if (m || S.queue.includes(id())) return 5;
+  return document.hidden ? 30 : 10;
+}
+function beat() { since++; tickUI(); titleTick(); if (since >= pollEvery()) { since = 0; load(); } }
 async function act(o) {
-  if (o.type === 'join') missed = false;
+  if (o.type === 'join') { missed = false; unlockAudio(); if (window.Notification && Notification.permission === 'default') { try { Notification.requestPermission(); } catch (e) {} } }
   const j = await (await fetch('/api/state', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ me: id(), token: tk, ...o }) })).json();
-  if (!j.ok) { alert(j.err); if (/sign in/.test(j.err)) { tk = ''; localStorage.tk = ''; } }
+  if (!j.ok) { toastErr(j.err); if (/sign in/.test(j.err)) { tk = ''; localStorage.tk = ''; } }
   else if (j.token) { tk = j.token; localStorage.tk = tk; me = o.name; localStorage.me = me; }
   else if (o.type === 'submit') f.w = '13', f.l = '', f.shot = '';
   else if (o.type === 'say') f.msg = '';
   else if (o.type === 'tsay') f.tmsg = '';
   else if (o.type === 'announce') f.code = '';
+  if (j.ok && OK[o.type]) toast(OK[o.type], 'ok', 2500);
   load(true);
 }
 async function load(force) {
   try { const j = await (await fetch('/api/state?me=' + encodeURIComponent(id()) + '&token=' + tk)).json(); if (!j.players) throw new Error('bad response'); S = j; }
   catch (e) { if (!S) A.innerHTML = '<div class="card"><h2>Cannot reach the server</h2><div class="mut">The page loaded, but the server did not answer. Refresh in a minute. If it keeps happening, the site owner should check the Vercel function logs and the database connection.</div></div>'; return; }
-  off = S.now - Date.now();
+  off = S.now - Date.now(); since = 0; notifyChanges();
   const { now: _n, ...rest } = S, k = JSON.stringify(rest) + tab + me + tk + mode;
   if (force || k !== last) { last = k; render(); }
 }
@@ -182,7 +240,7 @@ function board() {
 const trk = u => u ? (/^https:\/\/(www\.)?tracker\.gg\//i.test(u) ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer" style="color:var(--blue)">tracker.gg profile</a>` : '') : '<span class="mut sm">No tracker link</span>';
 const rankOpts = (sel, ph) => (ph ? '<option value="">Set rank...</option>' : '') + Object.entries(S.ranks || {}).map(([r, e]) => `<option value="${esc(r)}" ${r === (sel || (ph ? '' : 'Unranked')) ? 'selected' : ''}>${esc(r)} (${e})</option>`).join('');
 function approve(k) { act({ type: 'review', target: k, approve: true, rank: f.rk[k] || 'Unranked' }); }
-function setRank(k) { if (!f.sr[k]) return alert('Choose a rank first.'); act({ type: 'setrank', target: k, rank: f.sr[k] }); }
+function setRank(k) { if (!f.sr[k]) return toastErr('Choose a rank first.'); act({ type: 'setrank', target: k, rank: f.sr[k] }); }
 function mod() {
   if (f.pool === undefined) f.pool = S.pool.join(', ');
   const P = Object.entries(S.players), pend = P.filter(([k, v]) => v.status === 'pending'), d = S.matches.filter(x => x.status === 'disputed'), live = S.matches.filter(x => ['live', 'submitted'].includes(x.status));
@@ -202,7 +260,7 @@ function render() {
   const ae = document.activeElement, fid = ae && ae.id, pos = ae && ae.selectionStart;
   if (tab === 'mod' && !isMod()) tab = 'play';
   const t = (k, l) => `<button class="${tab === k ? 'on' : ''}" onclick="go('${k}')">${l}</button>`;
-  H.innerHTML = `<div class="in"><h1>Ladder <span style="color:var(--red)">/ Valorant</span></h1><div class="row"><div class="tabs">${t('play', 'Play')}${t('board', 'Leaderboard')}${t('rules', 'Rules')}${tk ? t('hist', 'History') : ''}${isMod() ? t('mod', 'Moderator') : ''}</div>${tk ? '<button onclick="out()">Sign out</button>' : ''}</div></div>`;
+  H.innerHTML = `<div class="in"><h1>Ladder <span style="color:var(--red)">/ Valorant</span></h1><div class="row"><div class="tabs">${t('play', 'Play')}${t('board', 'Leaderboard')}${t('rules', 'Rules')}${tk ? t('hist', 'History') : ''}${isMod() ? t('mod', 'Moderator') : ''}</div>${tk ? alertBtn() + '<button onclick="out()">Sign out</button>' : ''}</div></div>`;
   A.innerHTML = ({ play, board, rules: rulesView, hist: histView, mod }[tab])();
   const el = fid && document.getElementById(fid); if (el) { el.focus(); try { el.setSelectionRange(pos, pos); } catch (e) {} }
   ['log', 'tlog'].forEach(k => { const lg = document.getElementById(k); if (lg) lg.scrollTop = lg.scrollHeight; });
@@ -230,12 +288,13 @@ function supToggle() { sup.open = !sup.open; supShell(); if (sup.open) { const i
 async function supPoll() {
   if (!tk) return; const j = await sapi({ type: 'mine' }); if (!j.ok) return;
   const had = !!sup.t, prev = JSON.stringify(sup.t); sup.t = j.ticket;
+  const na = j.ticket ? j.ticket.thread.filter(x => x.who === 'admin').length : 0; if (lastAdmin >= 0 && na > lastAdmin) ping('An admin replied.', 'Open Help to read it.'); lastAdmin = na;
   if (JSON.stringify(j.ticket) !== prev) { if (!!sup.t !== had || !sup.open) supShell(); else supLog(); }
 }
 async function supClose() { if (!sup.t) return; await sapi({ type: 'close', ticketId: sup.t.id }); sup.msgs = []; await supPoll(); }
 async function supSend() {
   const el = document.getElementById('sin'), text = el ? el.value.trim() : ''; if (!text || sup.busy) return; el.value = '';
-  if (sup.t) { const j = await sapi({ type: 'say', text }); if (j.ok) await supPoll(); else alert(j.err); return; }
+  if (sup.t) { const j = await sapi({ type: 'say', text }); if (j.ok) await supPoll(); else toastErr(j.err); return; }
   sup.msgs.push({ role: 'user', content: text }); sup.busy = true; supLog();
   const j = await sapi({ type: 'ask', messages: sup.msgs }); sup.busy = false;
   if (!j.ok) { sup.msgs.push({ role: 'assistant', content: j.err || 'Something went wrong. Please try again.' }); supLog(); return; }
@@ -246,11 +305,13 @@ async function loadTix(force) {
   if (!tk) return; const j = await sapi({ type: 'list' }); if (!j.ok) return;
   if (force || JSON.stringify(j.tickets) !== JSON.stringify(allTix)) { allTix = j.tickets; render(); }
 }
-async function tixReply(k) { const text = (f['r_' + k] || '').trim(); if (!text) return; const j = await sapi({ type: 'reply', ticketId: k, text }); if (j.ok) { f['r_' + k] = ''; loadTix(true); } else alert(j.err); }
+async function tixReply(k) { const text = (f['r_' + k] || '').trim(); if (!text) return; const j = await sapi({ type: 'reply', ticketId: k, text }); if (j.ok) { f['r_' + k] = ''; loadTix(true); } else toastErr(j.err); }
 async function tixClose(k) { await sapi({ type: 'close', ticketId: k }); loadTix(true); }
 function supSection() {
   const col = { high: 'var(--red)', normal: 'var(--blue)', low: 'var(--mut)' };
   return '<h3>Support tickets</h3>' + (allTix.length ? allTix.map(t => `<div class="card" style="background:#0b0f14"><div class="row"><b>${esc(t.name)}</b><span class="chip" style="color:${col[t.urgency]}">${esc(t.urgency)}</span></div><div>${esc(t.summary)}</div><div class="chat">${t.thread.slice(-6).map(x => `<div><b>${esc(x.who === 'player' ? t.name : x.who === 'admin' ? 'Admin ' + x.name : 'Bot')}</b> ${esc(x.t)}</div>`).join('')}</div><div class="row" style="width:100%">${inp('r_' + t.id, 'Reply to player')}<button class="p" onclick="tixReply('${t.id}')">Reply</button><button onclick="tixClose('${t.id}')">Close ticket</button></div></div>`).join('') : '<div class="mut">No open tickets.</div>');
 }
-load(true); setInterval(() => { if (!document.hidden) load(); }, 4000); setInterval(tickUI, 1000); setInterval(() => { if (!document.hidden && tk) { supPoll(); if (tab === 'mod' && isMod()) loadTix(); } }, 8000);
+load(true);
+setInterval(() => { if (!document.hidden && tk) { supPoll(); if (tab === 'mod' && isMod()) loadTix(); } }, 8000);
+try { const w = new Worker(URL.createObjectURL(new Blob(['setInterval(function(){postMessage(1)},1000)']))); w.onmessage = beat; } catch (e) { setInterval(beat, 1000); }
 </script></body></html>

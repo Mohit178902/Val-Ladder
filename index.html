@@ -38,7 +38,7 @@ img{max-width:100%;max-height:240px;border-radius:10px}
 @media(max-width:560px){.clock{font-size:60px}h2{font-size:28px}}
 </style></head><body><header id="hd"></header><main id="app"></main>
 <script>
-let S, tab = 'play', mode = 'login', me = localStorage.me || '', tk = localStorage.tk || '', f = { w: '13', l: '', shot: '', proof: '', name: '', pass: '', msg: '', tmsg: '', code: '' }, shots = {}, last = '', off = 0, wasIn = false, missed = false;
+let S, tab = 'play', mode = 'login', me = localStorage.me || '', tk = localStorage.tk || '', f = { w: '13', l: '', shot: '', proof: '', name: '', pass: '', msg: '', tmsg: '', code: '', tracker: '', rk: {}, sr: {} }, shots = {}, last = '', off = 0, wasIn = false, missed = false;
 const H = document.getElementById('hd'), A = document.getElementById('app'), id = () => me.toLowerCase();
 const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const nm = i => esc(S.players[i] ? S.players[i].name : i), now = () => Date.now() + off;
@@ -83,8 +83,8 @@ function tickUI() {
 function auth() {
   const c = mode === 'create';
   return `<div class="card"><h2>${c ? 'Create account' : 'Sign in'}</h2>${inp('name', 'Riot ID (Name#TAG)')}${inp('pass', 'Password', 'password')}` +
-    (c ? `<div class="mut">Upload a screenshot of your Valorant profile showing this Riot ID. Our team checks it before you can play.</div><input type="file" accept="image/*" onchange="pick('proof')(event)" aria-label="Profile screenshot">${f.proof ? `<img src="${f.proof}" alt="Profile preview">` : ''}` : '') +
-    `<div class="row"><button class="p" onclick="act({type:'${c ? 'register' : 'login'}',name:f.name.trim(),password:f.pass,proof:f.proof})">${c ? 'Create account' : 'Sign in'}</button><button onclick="mode='${c ? 'login' : 'create'}';render()">${c ? 'I have an account' : 'Create account'}</button></div></div>`;
+    (c ? `${inp('tracker', 'tracker.gg profile link (optional)')}<div class="mut">Upload a screenshot of your Valorant profile showing this Riot ID. Our team checks it before you can play.</div><input type="file" accept="image/*" onchange="pick('proof')(event)" aria-label="Profile screenshot">${f.proof ? `<img src="${f.proof}" alt="Profile preview">` : ''}` : '') +
+    `<div class="row"><button class="p" onclick="act({type:'${c ? 'register' : 'login'}',name:f.name.trim(),password:f.pass,proof:f.proof,tracker:f.tracker})">${c ? 'Create account' : 'Sign in'}</button><button onclick="mode='${c ? 'login' : 'create'}';render()">${c ? 'I have an account' : 'Create account'}</button></div></div>`;
 }
 function checkView(c) {
   const mine = c.ready.includes(id());
@@ -163,6 +163,10 @@ function board() {
   const mi = r.findIndex(x => x[0] === id());
   return `<div class="card"><h2>Top 100</h2>${r.length ? r.slice(0, 100).map(row).join('') : '<div class="mut">No verified players yet.</div>'}` + (mi >= 100 ? `<div class="mut sm">Your rank</div>${row(r[mi], mi)}` : '') + `</div>`;
 }
+const trk = u => u ? (/^https:\/\/(www\.)?tracker\.gg\//i.test(u) ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer" style="color:var(--blue)">tracker.gg profile</a>` : '') : '<span class="mut sm">No tracker link</span>';
+const rankOpts = (sel, ph) => (ph ? '<option value="">Set rank...</option>' : '') + Object.entries(S.ranks || {}).map(([r, e]) => `<option value="${esc(r)}" ${r === (sel || (ph ? '' : 'Unranked')) ? 'selected' : ''}>${esc(r)} (${e})</option>`).join('');
+function approve(k) { act({ type: 'review', target: k, approve: true, rank: f.rk[k] || 'Unranked' }); }
+function setRank(k) { if (!f.sr[k]) return alert('Choose a rank first.'); act({ type: 'setrank', target: k, rank: f.sr[k] }); }
 function mod() {
   if (f.pool === undefined) f.pool = S.pool.join(', ');
   const P = Object.entries(S.players), pend = P.filter(([k, v]) => v.status === 'pending'), d = S.matches.filter(x => x.status === 'disputed'), live = S.matches.filter(x => ['live', 'submitted'].includes(x.status));
@@ -171,10 +175,10 @@ function mod() {
   const box = c => `<div class="card" style="background:#0b0f14">${c}</div>`;
   const bt = (l, o, p) => `<button${p ? ' class="p"' : ''} onclick="act(${esc(JSON.stringify(o))})">${l}</button>`;
   return `<div class="card"><h2>Moderator</h2><h3>Test tools</h3><div class="mut">Join the queue on the Play tab first, then fill the empty spots with test players. Test players ready up on their own.</div><div class="row">${bt('Fill queue with test players', { type: 'fillqueue' }, 1)}${bt('Remove test players', { type: 'clearbots' })}</div><h3>Map pool</h3><div class="row" style="width:100%">${inp('pool', 'Maps, comma separated')}<button class="p" onclick="act({type:'setpool',maps:f.pool.split(',').map(x=>x.trim()).filter(Boolean)})">Save pool</button></div><div class="mut sm">Applies to new matches.</div>${supSection()}<h3>Accounts to verify</h3>` +
-    (pend.length ? pend.map(([k, v]) => box(`<div>${esc(v.name)}</div>${img('p' + k)}<div class="row">${bt('Approve', { type: 'review', target: k, approve: true }, 1)}${bt('Reject', { type: 'review', target: k, approve: false })}</div>`)).join('') : '<div class="mut">No accounts waiting.</div>') +
+    (pend.length ? pend.map(([k, v]) => box(`<div><b>${esc(v.name)}</b></div>${trk(v.tracker)}${img('p' + k)}<div class="row"><select aria-label="Rank" onchange="f.rk[${ja(k)}]=this.value">${rankOpts(f.rk[k])}</select><button class="p" onclick="approve(${ja(k)})">Approve</button>${bt('Reject', { type: 'review', target: k, approve: false })}</div>`)).join('') : '<div class="mut">No accounts waiting.</div>') +
     `<h3>Disputed matches</h3>` + (d.length ? d.map(x => box(`<div>Team ${x.winner} reports ${x.scoreW}-${x.scoreL}. Leaders: ${nm(x.A[0])} vs ${nm(x.B[0])}</div>${img('m' + x.id)}<div class="row">${bt('Uphold result', { type: 'resolve', matchId: x.id, uphold: true }, 1)}${bt('Void match', { type: 'resolve', matchId: x.id, uphold: false })}</div>`)).join('') : '<div class="mut">No disputed matches.</div>') +
     `<h3>Open matches</h3>` + (live.length ? live.map(x => box(`<div>${nm(x.A[0])} vs ${nm(x.B[0])} (${x.status}${x.phase && x.phase !== 'play' ? ', ' + x.phase : ''})</div><div class="chat">${x.chat.slice(-5).map(c => line(x, c)).join('') || '<span class="mut">No chat.</span>'}</div><div class="row">${x.status === 'live' && (x.phase || 'play') === 'play' && now() < x.playUntil ? bt('End timer early', { type: 'skiptimer', matchId: x.id }) : ''}${x.status === 'submitted' ? bt('Uphold result', { type: 'resolve', matchId: x.id, uphold: true }, 1) : ''}${bt('Void match', { type: 'voidmatch', matchId: x.id })}</div>`)).join('') : '<div class="mut">No open matches.</div>') +
-    `<h3>Players</h3>` + P.filter(([k, v]) => k !== id() && !v.bot).map(([k, v]) => `<div class="lb"><span>${esc(v.name)} <span class="mut sm">${v.role}, ${v.status}</span></span><span class="row">` +
+    `<h3>Players</h3>` + P.filter(([k, v]) => k !== id() && !v.bot).map(([k, v]) => `<div class="lb"><span>${esc(v.name)} <span class="mut sm">${v.role}, ${v.status}, ${v.elo} Elo${v.rank ? ', seeded ' + v.rank : ''}</span> ${trk(v.tracker)}</span><span class="row"><select aria-label="Rank" onchange="f.sr[${ja(k)}]=this.value">${rankOpts(f.sr[k], 1)}</select><button class="s" onclick="setRank(${ja(k)})">Set rank</button>` +
       (v.role === 'mod' ? bt('Remove moderator', { type: 'setrole', target: k, role: 'player' }) : bt('Make moderator', { type: 'setrole', target: k, role: 'mod' }) + (v.status === 'banned' ? bt('Unban', { type: 'ban', target: k, ban: false }) : bt('Ban', { type: 'ban', target: k, ban: true }))) + `</span></div>`).join('') + `</div>`;
 }
 function render() {

@@ -11,16 +11,33 @@ const hasRank = x => Object.prototype.hasOwnProperty.call(RANK_ELO, x);
 const BOOT = (process.env.MOD_BOOTSTRAP || '').toLowerCase().split(',').map(x => x.trim()).filter(Boolean);
 const RULES = 'keep the cheats off and no pauses only timeouts';
 const r = async c => (await (await fetch(U, { method: 'POST', headers: { Authorization: 'Bearer ' + T }, body: JSON.stringify(c) })).json()).result;
-const load = async () => { const v = await r(['GET', 'ladder']); const s = v ? JSON.parse(v) : { players: {}, queue: [], matches: [] }; s.checks = s.checks || []; return s; };
+const load = async () => { const v = await r(['GET', 'ladder']); const s = v ? JSON.parse(v) : { players: {}, queue: [], matches: [] }; s.checks = s.checks || []; s.qt = s.qt || {}; return s; };
 const hash = (p, s) => crypto.scryptSync(p, s, 32).toString('hex');
 const TTL = (+process.env.SHOT_DAYS || 14) * 86400;
 const put = (k, v, ttl) => r(['SET', k, v, 'EX', ttl || TTL]);
 const rnd = () => crypto.randomBytes(16).toString('hex');
 const open = m => !['done', 'void'].includes(m.status);
 const busy = (s, id) => s.matches.some(m => open(m) && [...m.A, ...m.B].includes(id)) || s.checks.some(c => c.players.includes(id));
-const makeCheck = s => {
-  const ids = s.queue.splice(0, MIN);
-  s.checks.push({ id: rnd().slice(0, 8), players: ids, ready: ids.filter(k => s.players[k].bot), deadline: Date.now() + READY_MS });
+const ELO_RANGE = +process.env.ELO_RANGE || 200, ELO_GROW = process.env.ELO_GROW === undefined ? 50 : +process.env.ELO_GROW, ELO_MAX = +process.env.ELO_MAX || 500;
+const formMatches = s => {
+  let made = false;
+  for (;;) {
+    if (s.queue.length < MIN) break;
+    const now = Date.now(), q = s.queue.slice().sort((a, b) => s.players[a].elo - s.players[b].elo);
+    let best = null;
+    for (let i = 0; i + MIN <= q.length; i++) {
+      const w = q.slice(i, i + MIN), gap = s.players[w[MIN - 1]].elo - s.players[w[0]].elo;
+      const waited = Math.max(...w.map(k => now - (s.qt[k] || now))) / 60000;
+      const half = Math.min(ELO_MAX, ELO_RANGE + ELO_GROW * Math.floor(waited));
+      if (gap <= half * 2 && (!best || waited > best.waited || (waited === best.waited && gap < best.gap))) best = { w, waited, gap };
+    }
+    if (!best) break;
+    s.queue = s.queue.filter(k => !best.w.includes(k));
+    s.checks.push({ id: rnd().slice(0, 8), players: best.w, ready: best.w.filter(k => s.players[k].bot), deadline: Date.now() + READY_MS });
+    made = true;
+  }
+  for (const k of Object.keys(s.qt)) if (!s.queue.includes(k) && !s.checks.some(c => c.players.includes(k))) { delete s.qt[k]; made = true; }
+  return made;
 };
 const startMatch = (s, c) => {
   const ids = c.players.slice().sort((a, d) => s.players[d].elo - s.players[a].elo), A = [], B = [], now = Date.now();
@@ -44,7 +61,7 @@ const tick = s => {
     if (m.phase === 'side' && Date.now() > m.veto.deadline) { setSide(m, Math.random() < .5 ? 'attack' : 'defense', m.veto.deadline); ch = true; }
   }
   for (const c of s.checks.slice()) if (Date.now() > c.deadline) { s.queue = [...c.ready, ...s.queue]; s.checks = s.checks.filter(x => x !== c); ch = true; }
-  while (s.queue.length >= MIN) { makeCheck(s); ch = true; }
+  if (formMatches(s)) ch = true;
   return ch;
 };
 const migrate = async s => {
@@ -108,7 +125,7 @@ module.exports = async (req, res) => {
       return o;
     };
     const pl = {}; for (const k in s.players) { const p = s.players[k]; pl[k] = { name: p.name, elo: p.elo, status: p.status, role: p.role || 'player', bot: !!p.bot, ...(isM ? { tracker: p.tracker || '', rank: p.rank || '' } : {}) }; }
-    return res.json({ ranks: RANK_ELO, players: pl, queue: s.queue, min: MIN, checks: s.checks, now: Date.now(), readyMs: READY_MS, playMs: PLAY_MS, vetoMs: VETO_MS, sideMs: SIDE_MS, pool: s.pool && s.pool.length > 1 ? s.pool : POOL, matches: s.matches.filter(open).map(view) });
+    return res.json({ mm: { range: ELO_RANGE, grow: ELO_GROW, max: ELO_MAX }, ranks: RANK_ELO, players: pl, queue: s.queue, min: MIN, checks: s.checks, now: Date.now(), readyMs: READY_MS, playMs: PLAY_MS, vetoMs: VETO_MS, sideMs: SIDE_MS, pool: s.pool && s.pool.length > 1 ? s.pool : POOL, matches: s.matches.filter(open).map(view) });
   }
   const b = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const me = b.me, p = s.players[me], authed = p && p.token && p.token === b.token;
@@ -150,8 +167,8 @@ module.exports = async (req, res) => {
     case 'join':
       if (p.status !== 'approved') { err = 'Your account is not verified yet.'; break; }
       if (!s.queue.includes(me) && !busy(s, me)) {
-        s.queue.push(me);
-        while (s.queue.length >= MIN) makeCheck(s);
+        s.queue.push(me); s.qt[me] = Date.now();
+        formMatches(s);
       }
       break;
     case 'ready': {
@@ -238,10 +255,11 @@ module.exports = async (req, res) => {
       while (s.queue.length < MIN) {
         const k = 'bot' + i + '#test', n = 'Bot' + i + '#TEST'; i++;
         if (s.queue.includes(k) || busy(s, k)) continue;
-        s.players[k] = s.players[k] || { name: n, elo: 1000, salt: rnd(), hash: rnd(), token: rnd(), status: 'approved', role: 'player', bot: true };
+        s.players[k] = s.players[k] || { name: n, elo: p.elo, salt: rnd(), hash: rnd(), token: rnd(), status: 'approved', role: 'player', bot: true };
+        s.players[k].elo = p.elo; s.qt[k] = Date.now();
         s.queue.push(k);
       }
-      while (s.queue.length >= MIN) makeCheck(s);
+      formMatches(s);
       break;
     }
     case 'clearbots':

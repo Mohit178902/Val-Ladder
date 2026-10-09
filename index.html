@@ -33,6 +33,7 @@ input{font:inherit;background:#0b0f14;border:1px solid #33414f;border-radius:10p
 .lb{display:flex;justify-content:space-between;align-items:center;width:100%;padding:10px 14px;border-radius:10px;background:#0b0f14;gap:10px}.lb.me{background:#2a1a20;color:#ff8a93}
 .rk{font:700 22px 'Barlow Condensed';width:34px;color:var(--mut)}.t1 .rk{color:#ffd24d}.t2 .rk{color:#c9d4df}.t3 .rk{color:#d99a6c}
 .sb{position:fixed;right:18px;bottom:18px;z-index:20;border-radius:999px;box-shadow:0 6px 24px rgba(0,0,0,.5)}.sp{position:fixed;right:18px;bottom:18px;z-index:20;width:min(380px,calc(100vw - 36px));height:min(520px,calc(100vh - 36px));background:var(--card);border:1px solid var(--line);border-radius:16px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 6px 24px rgba(0,0,0,.5)}.sh{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-bottom:1px solid var(--line);gap:8px}.bub{max-width:88%;align-self:flex-start;background:#18222d;border-radius:12px;padding:8px 12px}.bub.u{align-self:flex-end;background:#2a1a20}
+.rules ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:8px}.rules li{line-height:1.45}
 .warn{background:#2a1a20;border:1px solid #5a2a33;border-radius:10px;padding:10px 14px;color:#ff8a93}
 img{max-width:100%;max-height:240px;border-radius:10px}
 @media(max-width:560px){.clock{font-size:60px}h2{font-size:28px}}
@@ -84,7 +85,7 @@ function auth() {
   const c = mode === 'create';
   return `<div class="card"><h2>${c ? 'Create account' : 'Sign in'}</h2>${inp('name', 'Riot ID (Name#TAG)')}${inp('pass', 'Password', 'password')}` +
     (c ? `${inp('tracker', 'tracker.gg profile link (optional)')}<div class="mut">Upload a screenshot of your Valorant profile showing this Riot ID. Our team checks it before you can play.</div><input type="file" accept="image/*" onchange="pick('proof')(event)" aria-label="Profile screenshot">${f.proof ? `<img src="${f.proof}" alt="Profile preview">` : ''}` : '') +
-    `<div class="row"><button class="p" onclick="act({type:'${c ? 'register' : 'login'}',name:f.name.trim(),password:f.pass,proof:f.proof,tracker:f.tracker})">${c ? 'Create account' : 'Sign in'}</button><button onclick="mode='${c ? 'login' : 'create'}';render()">${c ? 'I have an account' : 'Create account'}</button></div></div>`;
+    `<div class="row"><button class="p" onclick="act({type:'${c ? 'register' : 'login'}',name:f.name.trim(),password:f.pass,proof:f.proof,tracker:f.tracker})">${c ? 'Create account' : 'Sign in'}</button><button onclick="mode='${c ? 'login' : 'create'}';render()">${c ? 'I have an account' : 'Create account'}</button><button onclick="go('rules')">Read the rules</button></div></div>`;
 }
 function checkView(c) {
   const mine = c.ready.includes(id());
@@ -142,6 +143,21 @@ function play() {
   if (m.status === 'disputed') st = `<div class="card mut">A moderator is reviewing this match.</div>`;
   return head + info(m) + `<div class="g">${teamCol(m.A, 'var(--red)', 'Team A')}${teamCol(m.B, 'var(--blue)', 'Team B')}</div>${st}` + chat(m) + tchatCard(m);
 }
+const dur = ms => ms >= 60000 && ms % 60000 === 0 ? ms / 60000 + ' minutes' : Math.round(ms / 1000) + ' seconds';
+function rulesView() {
+  const mm = S.mm || { range: 200, grow: 50, max: 500 }, n = S.min || 10, ready = dur(S.readyMs || 90000), veto = dur(S.vetoMs || 30000), side = dur(S.sideMs || 30000), play = dur(S.playMs || 1500000);
+  const ranks = Object.entries(S.ranks || {}).map(([r, e]) => esc(r) + ' ' + e).join(', '), pool = (S.pool || []).map(esc).join(', ');
+  const sec = (title, items) => `<div class="card rules"><h3>${title}</h3><ul>${items.map(x => `<li>${x}</li>`).join('')}</ul></div>`;
+  return `<div class="card"><h2>Rules and how it works</h2><div class="warn"><b>Keep the cheats off and no pauses, only timeouts.</b></div><div class="mut">Read this before your first match. Moderators decide disputes and can ban accounts that break these rules.</div></div>` +
+    sec('Fair play', ['No cheating of any kind. Cheaters are banned.', 'No pausing during a match. Use timeouts only.', 'One account per person. Your Riot ID must be your own and match your profile screenshot.', 'Be respectful in chat. Moderators can delete messages and ban accounts.', 'Moderator decisions on disputes are final.']) +
+    sec('Accounts and starting rating', ['Sign up with your Riot ID, a password, a screenshot of your Valorant profile, and optionally a tracker.gg link.', 'A moderator checks every account by hand. You can queue only after you are approved.', 'The moderator sets your starting Elo from your rank: ' + ranks + '.']) +
+    sec('Matchmaking', [`A match needs <b>${n} players</b> whose Elo fits within <b>±${mm.range}</b> of each other.`, `The longer you wait, the wider the range: it grows by ${mm.grow} for every minute you wait, up to ±${mm.max}. The player who has waited longest is matched first.`, 'Teams are balanced by Elo. The highest-rated player on each team is its leader.', 'Leaving the queue costs nothing.']) +
+    sec('Ready check', [`When a match is found, everyone must press <b>Ready</b> within <b>${ready}</b>.`, 'Anyone who misses it is removed from the queue. The players who were ready go back to the front of the line.']) +
+    sec('Map ban and side choice', ['Team A\'s leader bans first, then the leaders take turns until one map is left. That map is played.', `Each ban has a <b>${veto}</b> timer. If it runs out, a random map is banned for you.`, 'Everyone on a team can vote for the map they want banned. Only your own team sees your votes, and your leader makes the ban.', `Team B's leader then chooses attack or defense. You have ${side}, or a side is picked at random.`, pool ? 'Current map pool: ' + pool + '.' : 'The map pool is set by the moderators.']) +
+    sec('Playing the match', ['Team A\'s leader creates the custom game in Valorant and announces the party code in the match chat. Everyone joins with that code.', 'The room chat is for the whole match. Each team also has a private team chat.', `After the side is chosen, the match is locked for <b>${play}</b>. Results cannot be reported until that timer ends.`]) +
+    sec('Reporting the result', ['The winning team\'s leader enters the score and uploads a screenshot of the scoreboard.', 'The losing team\'s leader confirms the result, or disputes it.', 'A disputed match goes to a moderator, who reviews the screenshot and decides. Moderators can also void a match.']) +
+    sec('Elo, leaderboard and help', ['After a confirmed result, each winner gains 24 Elo and each loser loses 24. Voided matches change nothing.', 'The Leaderboard shows the top 100 players. Your History tab shows your last 30 matches.', 'Need help? Use the Help button. A bot answers common questions and passes anything else to an admin.']);
+}
 let hist = null;
 async function loadHist() {
   if (!tk) return;
@@ -186,8 +202,8 @@ function render() {
   const ae = document.activeElement, fid = ae && ae.id, pos = ae && ae.selectionStart;
   if (tab === 'mod' && !isMod()) tab = 'play';
   const t = (k, l) => `<button class="${tab === k ? 'on' : ''}" onclick="go('${k}')">${l}</button>`;
-  H.innerHTML = `<div class="in"><h1>Ladder <span style="color:var(--red)">/ Valorant</span></h1><div class="row"><div class="tabs">${t('play', 'Play')}${t('board', 'Leaderboard')}${tk ? t('hist', 'History') : ''}${isMod() ? t('mod', 'Moderator') : ''}</div>${tk ? '<button onclick="out()">Sign out</button>' : ''}</div></div>`;
-  A.innerHTML = ({ play, board, hist: histView, mod }[tab])();
+  H.innerHTML = `<div class="in"><h1>Ladder <span style="color:var(--red)">/ Valorant</span></h1><div class="row"><div class="tabs">${t('play', 'Play')}${t('board', 'Leaderboard')}${t('rules', 'Rules')}${tk ? t('hist', 'History') : ''}${isMod() ? t('mod', 'Moderator') : ''}</div>${tk ? '<button onclick="out()">Sign out</button>' : ''}</div></div>`;
+  A.innerHTML = ({ play, board, rules: rulesView, hist: histView, mod }[tab])();
   const el = fid && document.getElementById(fid); if (el) { el.focus(); try { el.setSelectionRange(pos, pos); } catch (e) {} }
   ['log', 'tlog'].forEach(k => { const lg = document.getElementById(k); if (lg) lg.scrollTop = lg.scrollHeight; });
   tickUI();

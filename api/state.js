@@ -5,6 +5,9 @@ const MIN = +process.env.MIN_PLAYERS || 10;
 const POOL = (process.env.MAP_POOL || 'Abyss,Ascent,Haven,Lotus,Split,Summit,Sunset').split(',').map(x => x.trim()).filter(Boolean);
 const VETO_MS = (+process.env.VETO_SECONDS || 30) * 1000, SIDE_MS = (+process.env.SIDE_SECONDS || 30) * 1000;
 const READY_MS = (+process.env.READY_SECONDS || 90) * 1000, PLAY_MS = (+process.env.PLAY_MINUTES || 25) * 60000;
+let RANK_ELO = { Unranked: 1000, Iron: 700, Bronze: 850, Silver: 1000, Gold: 1150, Platinum: 1300, Diamond: 1500, Ascendant: 1700, Immortal: 1950, Radiant: 2300 };
+try { Object.assign(RANK_ELO, JSON.parse(process.env.RANK_ELO || '{}')); } catch (e) {}
+const hasRank = x => Object.prototype.hasOwnProperty.call(RANK_ELO, x);
 const BOOT = (process.env.MOD_BOOTSTRAP || '').toLowerCase().split(',').map(x => x.trim()).filter(Boolean);
 const RULES = 'keep the cheats off and no pauses only timeouts';
 const r = async c => (await (await fetch(U, { method: 'POST', headers: { Authorization: 'Bearer ' + T }, body: JSON.stringify(c) })).json()).result;
@@ -104,15 +107,15 @@ module.exports = async (req, res) => {
       }
       return o;
     };
-    const pl = {}; for (const k in s.players) { const p = s.players[k]; pl[k] = { name: p.name, elo: p.elo, status: p.status, role: p.role || 'player', bot: !!p.bot }; }
-    return res.json({ players: pl, queue: s.queue, min: MIN, checks: s.checks, now: Date.now(), readyMs: READY_MS, playMs: PLAY_MS, vetoMs: VETO_MS, sideMs: SIDE_MS, pool: s.pool && s.pool.length > 1 ? s.pool : POOL, matches: s.matches.filter(open).map(view) });
+    const pl = {}; for (const k in s.players) { const p = s.players[k]; pl[k] = { name: p.name, elo: p.elo, status: p.status, role: p.role || 'player', bot: !!p.bot, ...(isM ? { tracker: p.tracker || '', rank: p.rank || '' } : {}) }; }
+    return res.json({ ranks: RANK_ELO, players: pl, queue: s.queue, min: MIN, checks: s.checks, now: Date.now(), readyMs: READY_MS, playMs: PLAY_MS, vetoMs: VETO_MS, sideMs: SIDE_MS, pool: s.pool && s.pool.length > 1 ? s.pool : POOL, matches: s.matches.filter(open).map(view) });
   }
   const b = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const me = b.me, p = s.players[me], authed = p && p.token && p.token === b.token;
   const m = s.matches.find(x => x.id === b.matchId);
   const loserLead = m && (m.winner === 'A' ? m.B[0] : m.A[0]);
   const isMod = authed && p.role === 'mod';
-  const MODS = ['review', 'resolve', 'setrole', 'ban', 'voidmatch', 'delmsg', 'fillqueue', 'clearbots', 'skiptimer', 'setpool'];
+  const MODS = ['review', 'resolve', 'setrole', 'ban', 'voidmatch', 'delmsg', 'fillqueue', 'clearbots', 'skiptimer', 'setpool', 'setrank'];
   let err, extra = {};
   if (['join', 'leave', 'submit', 'confirm', 'dispute', 'say', 'announce', 'ready', 'mapban', 'pickside', 'vote', 'tsay', ...MODS].includes(b.type) && !authed) err = 'Please sign in again.';
   else if (MODS.includes(b.type) && !isMod) err = 'Moderators only.';
@@ -122,9 +125,10 @@ module.exports = async (req, res) => {
       if (!/^.{3,24}#.{2,8}$/.test(b.name || '')) err = 'Use the format Name#TAG.';
       else if ((b.password || '').length < 6) err = 'Password needs at least 6 characters.';
       else if (String(b.proof || '').length > 900000) err = 'That image is too large.';
+      else if (String(b.tracker || '').trim() && !/^https:\/\/(www\.)?tracker\.gg\//i.test(String(b.tracker).trim())) err = 'Use a link from tracker.gg, or leave it empty.';
       else if (!b.proof && !BOOT.includes(id)) err = 'Upload a screenshot of your Valorant profile for verification.';
       else if (s.players[id]) err = 'That Riot ID is already registered.';
-      else { const salt = rnd(); s.players[id] = { name: b.name, elo: 1000, salt, hash: hash(b.password, salt), token: rnd(), status: BOOT.includes(id) ? 'approved' : 'pending', role: BOOT.includes(id) ? 'mod' : 'player', hasProof: !!b.proof }; if (b.proof) await put('proof:' + id, b.proof, 2592000); extra.token = s.players[id].token; }
+      else { const salt = rnd(); s.players[id] = { name: b.name, elo: 1000, salt, hash: hash(b.password, salt), token: rnd(), status: BOOT.includes(id) ? 'approved' : 'pending', role: BOOT.includes(id) ? 'mod' : 'player', hasProof: !!b.proof, tracker: String(b.tracker || '').trim().slice(0, 200) }; if (b.proof) await put('proof:' + id, b.proof, 2592000); extra.token = s.players[id].token; }
       break;
     }
     case 'login': {
@@ -133,9 +137,14 @@ module.exports = async (req, res) => {
       else { if (BOOT.includes((b.name || '').toLowerCase())) { q.role = 'mod'; q.status = 'approved'; } extra.token = q.token; }
       break;
     }
+    case 'setrank': {
+      const q = s.players[b.target];
+      if (!q || q.bot || !hasRank(b.rank)) err = 'Pick a rank.'; else { q.rank = b.rank; q.elo = RANK_ELO[b.rank]; }
+      break;
+    }
     case 'review': {
       const q = s.players[b.target];
-      if (q && q.status === 'pending') { q.status = b.approve ? 'approved' : 'rejected'; delete q.proof; q.hasProof = false; await r(['DEL', 'proof:' + b.target]); }
+      if (q && q.status === 'pending') { q.status = b.approve ? 'approved' : 'rejected'; if (b.approve && hasRank(b.rank)) { q.rank = b.rank; q.elo = RANK_ELO[b.rank]; } delete q.proof; q.hasProof = false; await r(['DEL', 'proof:' + b.target]); }
       break;
     }
     case 'join':

@@ -56,6 +56,7 @@ const banMap = (m, team, map, at) => {
 const setSide = (m, side, at) => { m.sideB = side; m.phase = 'play'; m.playUntil = at + PLAY_MS; };
 const tick = s => {
   let ch = false;
+  for (const m of s.matches) if (m.status === 'submitted' && m.src === 'tracker' && Date.now() > m.autoAt) { finish(s, m); ch = true; }
   for (const m of s.matches) if (open(m) && ['veto', 'side'].includes(m.phase)) {
     while (m.phase === 'veto' && Date.now() > m.veto.deadline) { const l = openMaps(m); banMap(m, m.veto.turn, l[Math.random() * l.length | 0], m.veto.deadline); ch = true; }
     if (m.phase === 'side' && Date.now() > m.veto.deadline) { setSide(m, Math.random() < .5 ? 'attack' : 'defense', m.veto.deadline); ch = true; }
@@ -78,7 +79,7 @@ const note = (s, m, res, dl) => {
   const nm = k => (s.players[k] ? s.players[k].name : k);
   [['A', m.A], ['B', m.B]].forEach(([team, ids]) => ids.forEach(k => {
     if (!s.players[k] || s.players[k].bot) return;
-    HQ.get(s).push([k, { id: m.id, at: Date.now(), res, map: m.map || '', team, win: res === 'done' && m.winner === team, sw: m.scoreW, sl: m.scoreL, d: (dl || {})[k] || 0, e: s.players[k].elo, A: m.A.map(nm), B: m.B.map(nm) }]);
+    HQ.get(s).push([k, { id: m.id, at: Date.now(), res, map: m.map || '', team, win: res === 'done' && m.winner === team, sw: m.scoreW, sl: m.scoreL, d: (dl || {})[k] || 0, st: (m.tdata || {})[k] || null, e: s.players[k].elo, A: m.A.map(nm), B: m.B.map(nm) }]);
   }));
 };
 const flush = async s => {
@@ -99,7 +100,7 @@ module.exports = async (req, res) => {
   let changed = tick(s);
   if (await migrate(s)) changed = true;
   if (req.method === 'GET') {
-    if (changed) await r(['SET', 'ladder', JSON.stringify(s)]);
+    if (changed) { await r(['SET', 'ladder', JSON.stringify(s)]); await flush(s); }
     const q = req.query;
     if (q.hist) {
       const u = s.players[q.me]; if (!u || !u.token || u.token !== q.token) return res.status(403).json({});
@@ -269,6 +270,6 @@ module.exports = async (req, res) => {
     default: err = 'Unknown action.';
   }
   if (!err || changed) await r(['SET', 'ladder', JSON.stringify(s)]);
-  if (!err) await flush(s);
+  await flush(s);
   res.json({ ok: !err, err, ...extra });
 };
